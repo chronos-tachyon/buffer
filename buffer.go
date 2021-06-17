@@ -389,6 +389,7 @@ func (b *Buffer) WriteTo(w io.Writer) (int64, error) {
 	return total, err
 }
 
+// DebugString returns a detailed dump of the Buffer's internal state.
 func (b Buffer) DebugString() string {
 	var buf strings.Builder
 	buf.WriteString("Buffer(i=")
@@ -412,10 +413,12 @@ func (b Buffer) DebugString() string {
 	return buf.String()
 }
 
+// GoString returns a brief dump of the Buffer's internal state.
 func (b Buffer) GoString() string {
 	return fmt.Sprintf("Buffer(i=%d,j=%d,cap=%d,busy=%t)", b.i, b.j, b.Cap(), b.busy)
 }
 
+// String returns a plain-text description of the buffer.
 func (b Buffer) String() string {
 	return fmt.Sprintf("(buffer with %d bytes)", b.Len())
 }

@@ -220,9 +220,10 @@ func (w Window) FindLongestPrefix(p []byte) (distance uint, length uint, ok bool
 	return
 }
 
+// DebugString returns a detailed dump of the Window's internal state.
 func (w Window) DebugString() string {
 	var buf strings.Builder
-	buf.WriteString("Buffer(i=")
+	buf.WriteString("Window(i=")
 	buf.WriteString(strconv.FormatUint(uint64(w.i), 10))
 	buf.WriteString(",j=")
 	buf.WriteString(strconv.FormatUint(uint64(w.j), 10))
@@ -243,10 +244,12 @@ func (w Window) DebugString() string {
 	return buf.String()
 }
 
+// GoString returns a brief dump of the Window's internal state.
 func (w Window) GoString() string {
 	return fmt.Sprintf("Window(i=%d,j=%d,cap=%d,busy=%t)", w.i, w.j, w.Cap(), w.busy)
 }
 
+// String returns a plain-text description of the buffer.
 func (w Window) String() string {
 	return fmt.Sprintf("(sliding window with %d bytes)", w.Len())
 }
