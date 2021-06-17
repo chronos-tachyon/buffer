@@ -2,7 +2,10 @@
 package buffer
 
 import (
+	"fmt"
 	"io"
+	"strconv"
+	"strings"
 
 	"github.com/chronos-tachyon/assert"
 )
@@ -15,6 +18,7 @@ type Buffer struct {
 	i     uint32
 	j     uint32
 	busy  bool
+	nbits byte
 }
 
 // New is a convenience function that allocates a new Buffer and calls Init on it.
@@ -24,6 +28,11 @@ func New(numBits byte) *Buffer {
 	return b
 }
 
+// NumBits returns the number of bits used to initialize this Buffer.
+func (b Buffer) NumBits() byte {
+	return b.nbits
+}
+
 // Cap returns the maximum byte capacity of the Buffer.
 func (b Buffer) Cap() uint {
 	return uint(len(b.slice))
@@ -31,19 +40,15 @@ func (b Buffer) Cap() uint {
 
 // Len returns the number of bytes currently in the Buffer.
 func (b Buffer) Len() uint {
-	bCap := b.Cap()
-	switch {
-	case b.busy:
+	if b.busy {
 		i := uint(b.i)
 		j := uint(b.j)
 		if i >= j {
-			j += bCap
+			j += b.Cap()
 		}
 		return (j - i)
-
-	default:
-		return 0
 	}
+	return 0
 }
 
 // IsEmpty returns true iff the Buffer contains no bytes.
@@ -70,6 +75,7 @@ func (b *Buffer) Init(numBits byte) {
 		i:     0,
 		j:     0,
 		busy:  false,
+		nbits: numBits,
 	}
 }
 
@@ -103,9 +109,6 @@ func (b *Buffer) PrepareBulkWrite(length uint) []byte {
 	case b.busy && i == j:
 		return nil
 
-	case length == 0:
-		available = 0
-
 	case b.busy && i < j:
 		available = bCap - j
 
@@ -113,7 +116,8 @@ func (b *Buffer) PrepareBulkWrite(length uint) []byte {
 		available = i - j
 
 	default:
-		b.Clear()
+		b.i = 0
+		b.j = 0
 		available = bCap
 	}
 
@@ -161,22 +165,19 @@ func (b *Buffer) CommitBulkWrite(length uint) {
 // WriteByte writes a single byte to the Buffer.  If the Buffer is full,
 // ErrFull is returned.
 func (b *Buffer) WriteByte(ch byte) error {
-	switch {
-	case b.busy && b.i == b.j:
+	if b.busy && b.i == b.j {
 		return ErrFull
-
-	case b.busy:
-		b.slice[b.j] = ch
-		b.j = (b.j + 1) & b.mask
-		return nil
-
-	default:
-		b.slice[0] = ch
-		b.i = 0
-		b.j = 1
-		b.busy = true
-		return nil
 	}
+
+	if !b.busy {
+		b.i = 0
+		b.j = 0
+	}
+
+	b.slice[b.j] = ch
+	b.j = (b.j + 1) & b.mask
+	b.busy = true
+	return nil
 }
 
 // Write writes a slice of bytes to the Buffer.  If the Buffer is full, as many
@@ -187,45 +188,39 @@ func (b *Buffer) Write(p []byte) (int, error) {
 		return 0, nil
 	}
 
-	if b.busy && b.i == b.j {
-		return 0, ErrFull
+	if !b.busy {
+		b.i = 0
+		b.j = 0
 	}
 
 	bCap := b.Cap()
-
-	var i, j, k uint
-	var iw, jw, kw uint32
-	var multipart bool
-	var err error
-	if b.busy {
-		iw = b.i
-		jw = b.j
-		i = uint(iw)
-		j = uint(jw)
-		if i >= j {
-			j += bCap
-			multipart = true
-		}
+	jw := b.j
+	i := uint(b.i)
+	j := uint(b.j)
+	if b.busy && i >= j {
+		j += bCap
 	}
+
 	bUsed := (j - i)
 	bFree := bCap - bUsed
+	err := error(nil)
 	if pLen > bFree {
 		pLen = bFree
 		p = p[:pLen]
 		err = ErrFull
 	}
-	k = (j + pLen)
-	kw = (uint32(k) & b.mask)
 
-	if multipart {
-		x := bCap - uint(jw)
+	k := j + pLen
+	kw := uint32(k) & b.mask
+
+	if jw >= kw {
+		x := (bCap - j)
 		copy(b.slice[jw:bCap], p[:x])
 		copy(b.slice[0:kw], p[x:])
 	} else {
 		copy(b.slice[jw:kw], p)
 	}
 
-	b.i = iw
 	b.j = kw
 	b.busy = true
 	return int(pLen), err
@@ -241,7 +236,7 @@ func (b *Buffer) ReadFrom(r io.Reader) (int64, error) {
 	bCap := b.Cap()
 	for err == nil {
 		p := b.PrepareBulkWrite(bCap)
-		if len(p) == 0 {
+		if p == nil {
 			break
 		}
 
@@ -269,7 +264,7 @@ func (b *Buffer) ReadFrom(r io.Reader) (int64, error) {
 // on this Buffer; mutating methods are those which take a pointer receiver.
 //
 func (b *Buffer) PrepareBulkRead(length uint) []byte {
-	if length == 0 || !b.busy {
+	if !b.busy {
 		return nil
 	}
 
@@ -281,11 +276,12 @@ func (b *Buffer) PrepareBulkRead(length uint) []byte {
 	}
 
 	available := (j - i)
-	if length < available {
-		j = i + length
+	if length > available {
+		length = available
 	}
 
-	return b.slice[i:j]
+	k := i + length
+	return b.slice[i:k]
 }
 
 // CommitBulkRead completes the bulk read begun by the previous call to
@@ -297,22 +293,21 @@ func (b *Buffer) CommitBulkRead(length uint) {
 		return
 	}
 
-	assert.Assertf(b.busy, "length %d > available %d", length, 0)
-
 	bCap := b.Cap()
 	i := uint(b.i)
 	j := uint(b.j)
-	if i >= j {
-		j = bCap
-	}
 
-	available := (j - i)
+	var available uint
+	if b.busy {
+		if i >= j {
+			j = bCap
+		}
+		available = (j - i)
+	}
 	assert.Assertf(length <= available, "length %d > available %d", length, available)
-	if length < available {
-		j = i + length
-	}
 
-	b.i = uint32(j) & b.mask
+	k := i + length
+	b.i = uint32(k) & b.mask
 	b.busy = (b.i != b.j)
 }
 
@@ -342,36 +337,30 @@ func (b *Buffer) Read(p []byte) (int, error) {
 	}
 
 	bCap := b.Cap()
-	iw := b.i
-	jw := b.j
-	i := uint(iw)
-	j := uint(jw)
-	multipart := false
+	i := uint(b.i)
+	j := uint(b.j)
 	if i >= j {
 		j += bCap
-		multipart = true
 	}
 
-	bUsed := (j - i)
-	if pLen > bUsed {
-		pLen = bUsed
+	available := (j - i)
+	if pLen > available {
+		pLen = available
 		p = p[:pLen]
 	}
 
 	k := i + pLen
 	kw := uint32(k) & b.mask
 
-	if multipart {
-		x := bCap - uint(iw)
-		copy(p[:x], b.slice[iw:bCap])
+	if b.i >= kw {
+		x := (bCap - i)
+		copy(p[:x], b.slice[i:bCap])
 		copy(p[x:], b.slice[0:kw])
-	} else if kw == 0 {
-		copy(p, b.slice[iw:bCap])
 	} else {
-		copy(p, b.slice[iw:kw])
+		copy(p, b.slice[i:kw])
 	}
 
-	b.i = kw
+	b.i = uint32(kw)
 	b.busy = (b.i != b.j)
 	return int(pLen), nil
 }
@@ -386,7 +375,7 @@ func (b *Buffer) WriteTo(w io.Writer) (int64, error) {
 	bCap := b.Cap()
 	for err == nil {
 		p := b.PrepareBulkRead(bCap)
-		if len(p) == 0 {
+		if p == nil {
 			break
 		}
 
@@ -400,11 +389,44 @@ func (b *Buffer) WriteTo(w io.Writer) (int64, error) {
 	return total, err
 }
 
+func (b Buffer) DebugString() string {
+	var buf strings.Builder
+	buf.WriteString("Buffer(i=")
+	buf.WriteString(strconv.FormatUint(uint64(b.i), 10))
+	buf.WriteString(",j=")
+	buf.WriteString(strconv.FormatUint(uint64(b.j), 10))
+	buf.WriteString(",busy=")
+	buf.WriteString(strconv.FormatBool(b.busy))
+	buf.WriteString(",[ ")
+	i := uint(b.i)
+	j := uint(b.j)
+	if b.busy && i >= j {
+		j += b.Cap()
+	}
+	for k := i; k < j; k++ {
+		kw := uint32(k) & b.mask
+		ch := b.slice[kw]
+		fmt.Fprintf(&buf, "%02x ", ch)
+	}
+	buf.WriteString("])")
+	return buf.String()
+}
+
+func (b Buffer) GoString() string {
+	return fmt.Sprintf("Buffer(i=%d,j=%d,cap=%d,busy=%t)", b.i, b.j, b.Cap(), b.busy)
+}
+
+func (b Buffer) String() string {
+	return fmt.Sprintf("(buffer with %d bytes)", b.Len())
+}
+
 var (
-	_ io.Reader     = (*Buffer)(nil)
-	_ io.Writer     = (*Buffer)(nil)
-	_ io.ByteReader = (*Buffer)(nil)
-	_ io.ByteWriter = (*Buffer)(nil)
-	_ io.WriterTo   = (*Buffer)(nil)
-	_ io.ReaderFrom = (*Buffer)(nil)
+	_ io.Reader      = (*Buffer)(nil)
+	_ io.Writer      = (*Buffer)(nil)
+	_ io.ByteReader  = (*Buffer)(nil)
+	_ io.ByteWriter  = (*Buffer)(nil)
+	_ io.WriterTo    = (*Buffer)(nil)
+	_ io.ReaderFrom  = (*Buffer)(nil)
+	_ fmt.GoStringer = Buffer{}
+	_ fmt.Stringer   = Buffer{}
 )

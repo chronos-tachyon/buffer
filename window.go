@@ -1,8 +1,11 @@
 package buffer
 
 import (
+	"fmt"
 	"hash"
 	"io"
+	"strconv"
+	"strings"
 
 	"github.com/chronos-tachyon/assert"
 )
@@ -15,6 +18,7 @@ type Window struct {
 	i     uint32
 	j     uint32
 	busy  bool
+	nbits byte
 }
 
 // NewWindow is a convenience function that allocates a Window and calls Init on it.
@@ -24,6 +28,11 @@ func NewWindow(numBits byte) *Window {
 	return w
 }
 
+// NumBits returns the number of bits used to initialize this Window.
+func (w Window) NumBits() byte {
+	return w.nbits
+}
+
 // Cap returns the maximum byte capacity of the Window.
 func (w Window) Cap() uint {
 	return uint(len(w.slice))
@@ -31,13 +40,10 @@ func (w Window) Cap() uint {
 
 // Len returns the number of bytes currently in the Window.
 func (w Window) Len() uint {
-	if w.busy && w.i == w.j {
-		return w.Cap()
-	}
 	if w.busy {
 		i := uint(w.i)
 		j := uint(w.j)
-		if i > j {
+		if i >= j {
 			j += w.Cap()
 		}
 		return (j - i)
@@ -69,6 +75,7 @@ func (w *Window) Init(numBits byte) {
 		i:     0,
 		j:     0,
 		busy:  false,
+		nbits: numBits,
 	}
 }
 
@@ -213,7 +220,40 @@ func (w Window) FindLongestPrefix(p []byte) (distance uint, length uint, ok bool
 	return
 }
 
+func (w Window) DebugString() string {
+	var buf strings.Builder
+	buf.WriteString("Buffer(i=")
+	buf.WriteString(strconv.FormatUint(uint64(w.i), 10))
+	buf.WriteString(",j=")
+	buf.WriteString(strconv.FormatUint(uint64(w.j), 10))
+	buf.WriteString(",busy=")
+	buf.WriteString(strconv.FormatBool(w.busy))
+	buf.WriteString(",[ ")
+	i := uint(w.i)
+	j := uint(w.j)
+	if w.busy && i >= j {
+		j += w.Cap()
+	}
+	for k := i; k < j; k++ {
+		kw := uint32(k) & w.mask
+		ch := w.slice[kw]
+		fmt.Fprintf(&buf, "%02x ", ch)
+	}
+	buf.WriteString("])")
+	return buf.String()
+}
+
+func (w Window) GoString() string {
+	return fmt.Sprintf("Window(i=%d,j=%d,cap=%d,busy=%t)", w.i, w.j, w.Cap(), w.busy)
+}
+
+func (w Window) String() string {
+	return fmt.Sprintf("(sliding window with %d bytes)", w.Len())
+}
+
 var (
-	_ io.Writer     = (*Window)(nil)
-	_ io.ByteWriter = (*Window)(nil)
+	_ io.Writer      = (*Window)(nil)
+	_ io.ByteWriter  = (*Window)(nil)
+	_ fmt.GoStringer = Window{}
+	_ fmt.Stringer   = Window{}
 )
