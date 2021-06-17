@@ -1,0 +1,32 @@
+---
+linters:
+  enable:
+    - deadcode
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - structcheck
+    - typecheck
+    - unused
+    - varcheck
+    - exportloopref
+    - goconst
+    - gocyclo
+    - godot
+    - gofmt
+    - goimports
+    - misspell
+    - golint
+
+linters-settings:
+  gocyclo:
+    min-complexity: 15
+  staticcheck:
+    go: "1.16"
+  unused:
+    go: "1.16"
+
+issues:
+  exclude-use-default: false
