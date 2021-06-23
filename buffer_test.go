@@ -5,30 +5,30 @@ import (
 )
 
 func TestBuffer_Byte(t *testing.T) {
-	var b Buffer
-	b.Init(1)
+	var buffer Buffer
+	buffer.Init(1)
 
-	_, err := b.ReadByte()
+	_, err := buffer.ReadByte()
 	if err != ErrEmpty {
 		t.Errorf("ReadByte returned wrong error:\n\texpect: [%v]\n\tactual: [%v]", ErrEmpty, err)
 	}
 
-	err = b.WriteByte('a')
+	err = buffer.WriteByte('a')
 	if err != nil {
 		t.Errorf("WriteByte unexpectedly returned non-nil error: %v", err)
 	}
 
-	err = b.WriteByte('b')
+	err = buffer.WriteByte('b')
 	if err != nil {
 		t.Errorf("WriteByte unexpectedly returned non-nil error: %v", err)
 	}
 
-	err = b.WriteByte('c')
+	err = buffer.WriteByte('c')
 	if err != ErrFull {
 		t.Errorf("WriteByte returned wrong error:\n\texpect: [%v]\n\tactual: [%v]", ErrFull, err)
 	}
 
-	ch, err := b.ReadByte()
+	ch, err := buffer.ReadByte()
 	if err != nil {
 		t.Errorf("ReadByte unexpectedly returned non-nil error: %v", err)
 	}
@@ -36,12 +36,12 @@ func TestBuffer_Byte(t *testing.T) {
 		t.Errorf("ReadByte unexpectedly returned ch=%q, expected %q", rune(ch), rune('a'))
 	}
 
-	err = b.WriteByte('c')
+	err = buffer.WriteByte('c')
 	if err != nil {
 		t.Errorf("WriteByte unexpectedly returned non-nil error: %v", err)
 	}
 
-	ch, err = b.ReadByte()
+	ch, err = buffer.ReadByte()
 	if err != nil {
 		t.Errorf("ReadByte unexpectedly returned non-nil error: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestBuffer_Byte(t *testing.T) {
 		t.Errorf("ReadByte unexpectedly returned ch=%q, expected %q", ch, 'b')
 	}
 
-	ch, err = b.ReadByte()
+	ch, err = buffer.ReadByte()
 	if err != nil {
 		t.Errorf("ReadByte unexpectedly returned non-nil error: %v", err)
 	}
@@ -57,22 +57,22 @@ func TestBuffer_Byte(t *testing.T) {
 		t.Errorf("ReadByte unexpectedly returned ch=%q, expected %q", ch, 'c')
 	}
 
-	_, err = b.ReadByte()
+	_, err = buffer.ReadByte()
 	if err != ErrEmpty {
 		t.Errorf("ReadByte returned wrong error:\n\texpect: [%v]\n\tactual: [%v]", ErrEmpty, err)
 	}
 }
 
 func TestBuffer_Bytes(t *testing.T) {
-	var b Buffer
-	b.Init(1)
+	var buffer Buffer
+	buffer.Init(1)
 
-	err := b.WriteByte('0')
+	err := buffer.WriteByte('0')
 	if err != nil {
 		t.Errorf("WriteByte unexpectedly returned non-nil error: %v", err)
 	}
 
-	nn, err := b.Write([]byte{'a'})
+	nn, err := buffer.Write([]byte{'a'})
 	if err != nil {
 		t.Errorf("Write unexpectedly returned non-nil error: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestBuffer_Bytes(t *testing.T) {
 		t.Errorf("Write unexpectedly returned nn=%d, expected %d", nn, 1)
 	}
 
-	ch, err := b.ReadByte()
+	ch, err := buffer.ReadByte()
 	if err != nil {
 		t.Errorf("ReadByte unexpectedly returned non-nil error: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestBuffer_Bytes(t *testing.T) {
 		t.Errorf("ReadByte unexpectedly returned ch=%q, expected %q", ch, '0')
 	}
 
-	nn, err = b.Write([]byte{'b'})
+	nn, err = buffer.Write([]byte{'b'})
 	if err != nil {
 		t.Errorf("Write unexpectedly returned non-nil error: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestBuffer_Bytes(t *testing.T) {
 	}
 
 	var tmp [4]byte
-	nn, err = b.Read(tmp[:])
+	nn, err = buffer.Read(tmp[:])
 	if err != nil {
 		t.Errorf("Read unexpectedly returned non-nil error: %v", err)
 	}

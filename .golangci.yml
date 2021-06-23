@@ -13,7 +13,6 @@ linters:
     - varcheck
     - exportloopref
     - goconst
-    - gocyclo
     - godot
     - gofmt
     - goimports
@@ -21,8 +20,6 @@ linters:
     - golint
 
 linters-settings:
-  gocyclo:
-    min-complexity: 15
   staticcheck:
     go: "1.16"
   unused:
