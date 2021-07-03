@@ -108,3 +108,63 @@ func TestBuffer_Bytes(t *testing.T) {
 		t.Errorf("Read unexpectedly filled buffer with wrong data:\n\texpect: %#v\n\tactual: %#v", expect, tmp)
 	}
 }
+
+func BenchmarkBuffer_WriteByte_2(b *testing.B) {
+	var buffer Buffer
+	buffer.Init(2)
+	for n := 0; n < b.N; n++ {
+		err := buffer.WriteByte('a')
+		if err == ErrFull {
+			tmp := buffer.PrepareBulkRead(1 << 2)
+			buffer.CommitBulkRead(uint(len(tmp)))
+		}
+	}
+}
+
+func BenchmarkBuffer_WriteByte_8(b *testing.B) {
+	var buffer Buffer
+	buffer.Init(8)
+	for n := 0; n < b.N; n++ {
+		err := buffer.WriteByte('a')
+		if err == ErrFull {
+			tmp := buffer.PrepareBulkRead(1 << 8)
+			buffer.CommitBulkRead(uint(len(tmp)))
+		}
+	}
+}
+
+func BenchmarkBuffer_WriteByte_15(b *testing.B) {
+	var buffer Buffer
+	buffer.Init(15)
+	for n := 0; n < b.N; n++ {
+		err := buffer.WriteByte('a')
+		if err == ErrFull {
+			tmp := buffer.PrepareBulkRead(1 << 15)
+			buffer.CommitBulkRead(uint(len(tmp)))
+		}
+	}
+}
+
+func BenchmarkBuffer_WriteByte_16(b *testing.B) {
+	var buffer Buffer
+	buffer.Init(16)
+	for n := 0; n < b.N; n++ {
+		err := buffer.WriteByte('a')
+		if err == ErrFull {
+			tmp := buffer.PrepareBulkRead(1 << 16)
+			buffer.CommitBulkRead(uint(len(tmp)))
+		}
+	}
+}
+
+func BenchmarkBuffer_WriteByte_24(b *testing.B) {
+	var buffer Buffer
+	buffer.Init(24)
+	for n := 0; n < b.N; n++ {
+		err := buffer.WriteByte('a')
+		if err == ErrFull {
+			tmp := buffer.PrepareBulkRead(1 << 24)
+			buffer.CommitBulkRead(uint(len(tmp)))
+		}
+	}
+}

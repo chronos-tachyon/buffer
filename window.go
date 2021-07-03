@@ -4,171 +4,166 @@ import (
 	"fmt"
 	"hash"
 	"io"
-	"strconv"
-	"strings"
 
 	"github.com/chronos-tachyon/assert"
+	"github.com/chronos-tachyon/bzero"
 )
 
-// Window implements a sliding window backed by a ring buffer.  The ring buffer
-// has space for 2**N bytes for user-specified N.
+// Window implements a sliding window.  The Window has space for 2**N bytes for
+// user-specified N.
 type Window struct {
 	slice []byte
-	mask  uint32
-	i     uint32
-	j     uint32
-	busy  bool
+	end   uint32
+	size  uint32
 	nbits byte
 }
 
 // NewWindow is a convenience function that allocates a Window and calls Init on it.
-func NewWindow(numBits byte) *Window {
+func NewWindow(numBits uint) *Window {
 	window := new(Window)
 	window.Init(numBits)
 	return window
 }
 
 // NumBits returns the number of bits used to initialize this Window.
-func (window Window) NumBits() byte {
-	return window.nbits
+func (window Window) NumBits() uint {
+	return uint(window.nbits)
 }
 
-// Cap returns the maximum byte capacity of the Window.
-func (window Window) Cap() uint {
-	return uint(len(window.slice))
+// Size returns the maximum byte capacity of the Window.
+func (window Window) Size() uint {
+	return uint(window.size)
 }
 
-// Len returns the number of bytes currently in the Window.
-func (window Window) Len() uint {
-	if window.busy {
-		i := uint(window.i)
-		j := uint(window.j)
-		if i >= j {
-			j += window.Cap()
+// IsZero returns true iff the Window contains only 0 bytes.
+func (window Window) IsZero() bool {
+	slice := window.slice
+	j := window.end
+	i := j - window.size
+	for i < j {
+		if slice[i] != 0 {
+			return false
 		}
-		return (j - i)
+		i++
 	}
-	return 0
-}
-
-// IsEmpty returns true iff the Window contains no bytes.
-func (window Window) IsEmpty() bool {
-	return !window.busy
-}
-
-// IsFull returns true iff the Window contains the maximum number of bytes.
-func (window Window) IsFull() bool {
-	return window.busy && (window.i == window.j)
+	return true
 }
 
 // Init initializes the Window.  The Window will hold a maximum of 2**N bits,
 // where N is the argument provided.  The argument must be a number between 0
 // and 31 inclusive.
-func (window *Window) Init(numBits byte) {
+func (window *Window) Init(numBits uint) {
 	assert.Assertf(numBits <= 31, "numBits %d must not exceed 31", numBits)
 
-	size := uint32(1) << numBits
-	mask := (size - 1)
+	size := (uint32(1) << numBits)
 	*window = Window{
-		slice: make([]byte, size),
-		mask:  mask,
-		i:     0,
-		j:     0,
-		busy:  false,
-		nbits: numBits,
+		slice: make([]byte, size*2),
+		end:   size,
+		size:  size,
+		nbits: byte(numBits),
 	}
 }
 
 // Clear erases the contents of the Window.
 func (window *Window) Clear() {
-	window.i = 0
-	window.j = 0
-	window.busy = false
+	bzero.Uint8(window.slice)
+	window.end = window.size
 }
 
-// WriteByte writes a single byte to the Window.  If the Window is full, the
-// oldest byte in the inferred stream is dropped.
-func (window *Window) WriteByte(ch byte) error {
-	window.slice[window.j] = ch
-	same := window.busy && (window.i == window.j)
-	window.busy = true
-	window.j = (window.j + 1) & window.mask
-	if same {
-		window.i = window.j
+// PrepareBulkWrite obtains a slice into which the caller can write bytes.  The
+// bytes do not become a part of the Window's contents until CommitBulkWrite is
+// called.  If CommitBulkWrite is not subsequently called, the write is
+// considered abandoned.
+//
+// The returned slice may contain fewer bytes than requested, if the provided
+// length is greater than the size of the Window.  The caller must check the
+// slice's length before using it.
+//
+// The returned slice is only valid until the next call to any mutating method
+// on this Window; mutating methods are those which take a pointer receiver.
+//
+func (window *Window) PrepareBulkWrite(length uint) []byte {
+	size := window.size
+	if length > uint(size) {
+		length = uint(size)
 	}
+
+	window.shift(uint32(length))
+	j := window.end
+	k := j + uint32(length)
+	return window.slice[j:k]
+}
+
+// CommitBulkWrite completes the bulk write begun by the previous call to
+// PrepareBulkWrite.  The argument must be between 0 and the length of the
+// slice returned by PrepareBulkWrite.
+//
+func (window *Window) CommitBulkWrite(length uint) {
+	size := window.size
+	assert.Assertf(length <= uint(size), "length %d > window size %d", length, uint(size))
+	j := window.end
+	k := j + uint32(length)
+	window.end = k
+}
+
+// WriteByte writes a single byte to the Window.  The oldest byte in the Window
+// is dropped to make room.
+func (window *Window) WriteByte(ch byte) error {
+	window.shift(1)
+	window.slice[window.end] = ch
+	window.end++
 	return nil
 }
 
-// Write writes a slice of bytes to the Window.  If the Window is full or if
-// the slice exceeds the capacity of the Window, the oldest bytes in the
-// inferred stream are dropped until the slice fits.
-func (window *Window) Write(p []byte) (int, error) {
-	for _, ch := range p {
-		_ = window.WriteByte(ch)
+// Write writes a slice of bytes to the Window.  The oldest len(data) bytes in
+// the Window are dropped to make room.  If len(data) exceeds Window.Size(),
+// then only the last Window.Size() bytes of the slice will be recorded.
+func (window *Window) Write(data []byte) (int, error) {
+	result := len(data)
+	length := uint(result)
+	size := window.size
+	if length > uint(size) {
+		x := length - uint(size)
+		data = data[x:]
+		length = uint(size)
 	}
-	return len(p), nil
+
+	window.shift(uint32(length))
+	j := window.end
+	k := j + uint32(length)
+	copy(window.slice[j:k], data)
+	window.end = k
+	return result, nil
+}
+
+// BytesView returns a slice into the Window's contents.
+//
+// The returned slice is only valid until the next call to any mutating method
+// on this Window; mutating methods are those which take a pointer receiver.
+//
+func (window Window) BytesView() []byte {
+	size := window.size
+	j := window.end
+	i := j - size
+	return window.slice[i:j]
 }
 
 // Bytes allocates and returns a copy of the Window's contents.
 func (window Window) Bytes() []byte {
-	wCap := window.Cap()
-	iw := uint(window.i)
-	jw := uint(window.j)
-	i := iw
-	j := jw
-	split := false
-	if window.busy && iw >= jw {
-		j += wCap
-		split = true
-	}
-	out := make([]byte, j-i)
-	if split {
-		x := (wCap - iw)
-		copy(out[:x], window.slice[iw:wCap])
-		copy(out[x:], window.slice[0:jw])
-	} else {
-		copy(out, window.slice[iw:jw])
-	}
-	return out
-}
-
-// Slices returns zero or more []byte slices which provide a view of the
-// Window's contents.  The slices are ordered from oldest to newest, the slices
-// are only valid until the next mutating method call, and the contents of the
-// slices should not be modified.
-func (window Window) Slices() [][]byte {
-	var out [][]byte
-	if window.busy {
-		wCap := window.Cap()
-		i := uint(window.i)
-		j := uint(window.j)
-		out = make([][]byte, 0, 2)
-		if i >= j {
-			out = append(out, window.slice[i:wCap])
-			out = append(out, window.slice[0:j])
-		} else {
-			out = append(out, window.slice[i:j])
-		}
-	}
+	size := window.size
+	j := window.end
+	i := j - size
+	out := make([]byte, size)
+	copy(out, window.slice[i:j])
 	return out
 }
 
 // Hash non-destructively writes the contents of the Window into the provided
 // Hash object(s).
 func (window Window) Hash(hashes ...hash.Hash) {
-	if window.busy {
-		i := window.i
-		j := window.j
-		if i < j {
-			for _, h := range hashes {
-				h.Write(window.slice[i:j])
-			}
-		} else {
-			for _, h := range hashes {
-				h.Write(window.slice[i:])
-				h.Write(window.slice[:j])
-			}
-		}
+	view := window.BytesView()
+	for _, h := range hashes {
+		h.Write(view)
 	}
 }
 
@@ -176,126 +171,73 @@ func (window Window) Hash(hashes ...hash.Hash) {
 // with it, and calls Sum32 on it.
 func (window Window) Hash32(fn func() hash.Hash32) uint32 {
 	h := fn()
-	window.Hash(h)
+	h.Write(window.BytesView())
 	return h.Sum32()
 }
 
 // LookupByte returns a byte which was written previously.  The argument is the
 // offset into the window, with 1 representing the most recently written byte
-// and Window.Cap() representing the oldest byte still within the Window.
+// and Window.Size() representing the oldest byte still within the Window.
 func (window Window) LookupByte(distance uint) (byte, error) {
-	if distance == 0 || !window.busy {
+	size := window.size
+	if distance == 0 || distance > uint(size) {
 		return 0, ErrBadDistance
 	}
 
-	wCap := window.Cap()
-	i := uint(window.i)
-	j := uint(window.j)
-	if i >= j {
-		j += wCap
-	}
-
-	available := (j - i)
-	if distance > available {
-		return 0, ErrBadDistance
-	}
-
-	k := j - distance
-	kw := uint32(k) & window.mask
-	return window.slice[kw], nil
-}
-
-// FindLongestPrefix searches the Window for the longest prefix of the given
-// byte slice that exists within the Window's history.
-//
-// This method could use some additional optimization.
-//
-func (window Window) FindLongestPrefix(p []byte) (distance uint, length uint, ok bool) {
-	pLen := uint(len(p))
-
-	if pLen == 0 || !window.busy {
-		return
-	}
-
-	wCap := window.Cap()
-	iw := window.i
-	jw := window.j
-	i := uint(iw)
-	j := uint(jw)
-
-	loopGuts := func(kw uint32, k uint) {
-		if window.slice[kw] != p[0] {
-			return
-		}
-
-		currentDistance := (j - k)
-		currentLength := uint(1)
-		l := k + 1
-		lw := uint32(l) & window.mask
-		for l < j && currentLength < pLen {
-			if window.slice[lw] != p[currentLength] {
-				break
-			}
-			currentLength++
-			l++
-			lw = uint32(l) & window.mask
-		}
-
-		if !ok || currentLength > length || currentDistance < distance {
-			distance = currentDistance
-			length = currentLength
-			ok = true
-		}
-	}
-
-	if i >= j {
-		j += wCap
-		for kw := iw; kw < uint32(wCap); kw++ {
-			loopGuts(kw, uint(kw))
-		}
-		for kw := uint32(0); kw < jw; kw++ {
-			loopGuts(kw, uint(kw)+wCap)
-		}
-	} else {
-		for kw := iw; kw < jw; kw++ {
-			loopGuts(kw, uint(kw))
-		}
-	}
-	return
+	j := window.end
+	k := j - uint32(distance)
+	return window.slice[k], nil
 }
 
 // DebugString returns a detailed dump of the Window's internal state.
 func (window Window) DebugString() string {
-	var buf strings.Builder
-	buf.WriteString("Window(i=")
-	buf.WriteString(strconv.FormatUint(uint64(window.i), 10))
-	buf.WriteString(",j=")
-	buf.WriteString(strconv.FormatUint(uint64(window.j), 10))
-	buf.WriteString(",busy=")
-	buf.WriteString(strconv.FormatBool(window.busy))
-	buf.WriteString(",[ ")
-	i := uint(window.i)
-	j := uint(window.j)
-	if window.busy && i >= j {
-		j += window.Cap()
+	buf := takeStringsBuilder()
+	defer giveStringsBuilder(buf)
+
+	nbits := window.nbits
+	size := window.size
+	j := window.end
+	i := j - size
+	slice := window.slice
+
+	buf.WriteString("Window(")
+	fmt.Fprintf(buf, "nbits=%d, ", nbits)
+	fmt.Fprintf(buf, "size=%d, ", size)
+	fmt.Fprintf(buf, "i=%d, ", i)
+	fmt.Fprintf(buf, "j=%d, ", j)
+	buf.WriteString("[")
+	for i < j {
+		ch := slice[i]
+		i++
+		fmt.Fprintf(buf, " %02x", ch)
 	}
-	for k := i; k < j; k++ {
-		kw := uint32(k) & window.mask
-		ch := window.slice[kw]
-		fmt.Fprintf(&buf, "%02x ", ch)
-	}
-	buf.WriteString("])")
+	buf.WriteString(" ])")
 	return buf.String()
 }
 
 // GoString returns a brief dump of the Window's internal state.
 func (window Window) GoString() string {
-	return fmt.Sprintf("Window(i=%d,j=%d,cap=%d,busy=%t)", window.i, window.j, window.Cap(), window.busy)
+	return fmt.Sprintf("Window(size=%d,end=%d)", window.size, window.end)
 }
 
 // String returns a plain-text description of the Window.
 func (window Window) String() string {
-	return fmt.Sprintf("(sliding window with %d bytes)", window.Len())
+	return fmt.Sprintf("(sliding window with %d bytes)", window.Size())
+}
+
+func (window *Window) shift(n uint32) {
+	size := window.size
+	slice := window.slice
+	j := window.end
+	k := j + n
+	if k <= uint32(len(slice)) {
+		return
+	}
+
+	i := j - size
+	copy(slice[0:size], slice[i:j])
+	bzero.Uint8(slice[size:])
+	window.end = size
 }
 
 var (

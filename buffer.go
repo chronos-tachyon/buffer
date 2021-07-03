@@ -1,86 +1,77 @@
-// Package buffer implements ring buffers of bytes.
+// Package buffer provides multiple byte buffer implementations.
 package buffer
 
 import (
 	"fmt"
 	"io"
-	"strconv"
-	"strings"
 
 	"github.com/chronos-tachyon/assert"
+	"github.com/chronos-tachyon/bzero"
 )
 
-// Buffer implements a ring buffer.  The ring buffer has space for 2**N bytes
-// for user-specified N.
+// Buffer implements a byte buffer.  The Buffer has space for 2**N bytes for
+// user-specified N.
 type Buffer struct {
 	slice []byte
-	mask  uint32
 	a     uint32
 	b     uint32
-	busy  bool
+	size  uint32
 	nbits byte
 }
 
 // New is a convenience function that allocates a new Buffer and calls Init on it.
-func New(numBits byte) *Buffer {
+func New(numBits uint) *Buffer {
 	buffer := new(Buffer)
 	buffer.Init(numBits)
 	return buffer
 }
 
 // NumBits returns the number of bits used to initialize this Buffer.
-func (buffer Buffer) NumBits() byte {
-	return buffer.nbits
+func (buffer Buffer) NumBits() uint {
+	return uint(buffer.nbits)
 }
 
-// Cap returns the maximum byte capacity of the Buffer.
-func (buffer Buffer) Cap() uint {
-	return uint(len(buffer.slice))
+// Size returns the maximum byte capacity of the Buffer.
+func (buffer Buffer) Size() uint {
+	return uint(buffer.size)
 }
 
 // Len returns the number of bytes currently in the Buffer.
 func (buffer Buffer) Len() uint {
-	a := uint(buffer.a)
-	b := uint(buffer.b)
-	if buffer.busy && a >= b {
-		b += buffer.Cap()
-	}
-	return (b - a)
+	return uint(buffer.b - buffer.a)
 }
 
 // IsEmpty returns true iff the Buffer contains no bytes.
 func (buffer Buffer) IsEmpty() bool {
-	return !buffer.busy
+	return buffer.a == buffer.b
 }
 
 // IsFull returns true iff the Buffer contains the maximum number of bytes.
 func (buffer Buffer) IsFull() bool {
-	return buffer.busy && (buffer.a == buffer.b)
+	return (buffer.b - buffer.a) >= buffer.size
 }
 
 // Init initializes the Buffer.  The Buffer will hold a maximum of 2**N bits,
 // where N is the argument provided.  The argument must be a number between 0
 // and 31 inclusive.
-func (buffer *Buffer) Init(numBits byte) {
+func (buffer *Buffer) Init(numBits uint) {
 	assert.Assertf(numBits <= 31, "numBits %d must not exceed 31", numBits)
 
-	size := uint32(1) << numBits
-	mask := (size - 1)
+	size := (uint32(1) << numBits)
 	*buffer = Buffer{
-		slice: make([]byte, size),
-		mask:  mask,
+		slice: make([]byte, size*2),
 		a:     0,
 		b:     0,
-		busy:  false,
-		nbits: numBits,
+		size:  size,
+		nbits: byte(numBits),
 	}
 }
 
 // Clear erases the contents of the Buffer.
 func (buffer *Buffer) Clear() {
+	bzero.Uint8(buffer.slice)
 	buffer.a = 0
 	buffer.b = 0
-	buffer.busy = false
 }
 
 // PrepareBulkWrite obtains a slice into which the caller can write bytes.  The
@@ -97,32 +88,22 @@ func (buffer *Buffer) Clear() {
 // on this Buffer; mutating methods are those which take a pointer receiver.
 //
 func (buffer *Buffer) PrepareBulkWrite(length uint) []byte {
-	bCap := buffer.Cap()
-	a := uint(buffer.a)
-	b := uint(buffer.b)
+	size := buffer.size
+	a := buffer.a
+	b := buffer.b
 
-	var available uint
-	switch {
-	case buffer.busy && a == b:
+	x := (b - a)
+	y := (size - x)
+	if y == 0 {
 		return nil
-
-	case buffer.busy && a < b:
-		available = bCap - b
-
-	case buffer.busy:
-		available = a - b
-
-	default:
-		buffer.a = 0
-		buffer.b = 0
-		available = bCap
+	}
+	if length > uint(y) {
+		length = uint(y)
 	}
 
-	if length > available {
-		length = available
-	}
-
-	c := b + length
+	buffer.shift(uint32(length))
+	b = buffer.b
+	c := b + uint32(length)
 	return buffer.slice[b:c]
 }
 
@@ -131,100 +112,60 @@ func (buffer *Buffer) PrepareBulkWrite(length uint) []byte {
 // slice returned by PrepareBulkWrite.
 //
 func (buffer *Buffer) CommitBulkWrite(length uint) {
-	if length == 0 {
-		return
-	}
+	size := buffer.size
+	a := buffer.a
+	b := buffer.b
 
-	bCap := buffer.Cap()
-	bMask := buffer.mask
-	a := uint(buffer.a)
-	b := uint(buffer.b)
+	x := (b - a)
+	y := (size - x)
+	assert.Assertf(length <= uint(y), "length %d > available space %d", length, uint(y))
 
-	var available uint
-	switch {
-	case buffer.busy && a == b:
-		available = 0
-
-	case buffer.busy && a < b:
-		available = bCap - b
-
-	case buffer.busy:
-		available = a - b
-
-	default:
-		available = bCap
-	}
-
-	assert.Assertf(length <= available, "length %d > available %d", length, available)
-	buffer.b = uint32(b+length) & bMask
-	buffer.busy = true
+	buffer.b = b + uint32(length)
 }
 
 // WriteByte writes a single byte to the Buffer.  If the Buffer is full,
 // ErrFull is returned.
 func (buffer *Buffer) WriteByte(ch byte) error {
-	if buffer.busy && buffer.a == buffer.b {
+	size := buffer.size
+	a := buffer.a
+	b := buffer.b
+
+	x := (b - a)
+	y := (size - x)
+	if y == 0 {
 		return ErrFull
 	}
 
-	if !buffer.busy {
-		buffer.a = 0
-		buffer.b = 0
-	}
-
-	buffer.slice[buffer.b] = ch
-	buffer.b = (buffer.b + 1) & buffer.mask
-	buffer.busy = true
+	buffer.shift(1)
+	b = buffer.b
+	buffer.slice[b] = ch
+	buffer.b = b + 1
 	return nil
 }
 
 // Write writes a slice of bytes to the Buffer.  If the Buffer is full, as many
 // bytes as possible are written to the Buffer and ErrFull is returned.
-func (buffer *Buffer) Write(p []byte) (int, error) {
-	pLen := uint(len(p))
-	if pLen == 0 {
-		return 0, nil
-	}
+func (buffer *Buffer) Write(data []byte) (int, error) {
+	size := buffer.size
+	a := buffer.a
+	b := buffer.b
 
-	if !buffer.busy {
-		buffer.a = 0
-		buffer.b = 0
-	}
-
-	bCap := buffer.Cap()
-	bMask := buffer.mask
-	bSlice := buffer.slice
-	aw := buffer.a
-	bw := buffer.b
-	a := uint(aw)
-	b := uint(bw)
-	if buffer.busy && aw >= bw {
-		b += bCap
-	}
-
-	bUsed := (b - a)
-	bFree := bCap - bUsed
-	err := error(nil)
-	if pLen > bFree {
-		pLen = bFree
-		p = p[:pLen]
+	x := (b - a)
+	y := (size - x)
+	length := uint(len(data))
+	var err error
+	if length > uint(y) {
+		length = uint(y)
+		data = data[:length]
 		err = ErrFull
 	}
 
-	c := b + pLen
-	cw := uint32(c) & bMask
-
-	if bw >= cw {
-		x := (bCap - b)
-		copy(bSlice[bw:bCap], p[:x])
-		copy(bSlice[0:cw], p[x:])
-	} else {
-		copy(bSlice[bw:cw], p)
-	}
-
-	buffer.b = cw
-	buffer.busy = true
-	return int(pLen), err
+	buffer.shift(uint32(length))
+	b = buffer.b
+	c := b + uint32(length)
+	copy(buffer.slice[b:c], data)
+	buffer.b = c
+	return int(length), err
 }
 
 // ReadFrom attempts to fill this Buffer by reading from the provided Reader.
@@ -234,17 +175,17 @@ func (buffer *Buffer) ReadFrom(r io.Reader) (int64, error) {
 	var total int64
 	var err error
 
-	bCap := buffer.Cap()
+	size := buffer.Size()
 	for err == nil {
-		p := buffer.PrepareBulkWrite(bCap)
-		if p == nil {
+		buf := buffer.PrepareBulkWrite(size)
+		if buf == nil {
 			break
 		}
 
 		var nn int
-		nn, err = r.Read(p)
+		nn, err = r.Read(buf)
 		assert.Assertf(nn >= 0, "Read() returned %d, which is < 0", nn)
-		assert.Assertf(nn <= len(p), "Read() returned %d, which is > len(buffer) %d", nn, len(p))
+		assert.Assertf(nn <= len(buf), "Read() returned %d, which is > len(buffer) %d", nn, len(buf))
 		buffer.CommitBulkWrite(uint(nn))
 		total += int64(nn)
 	}
@@ -265,23 +206,18 @@ func (buffer *Buffer) ReadFrom(r io.Reader) (int64, error) {
 // on this Buffer; mutating methods are those which take a pointer receiver.
 //
 func (buffer *Buffer) PrepareBulkRead(length uint) []byte {
-	if !buffer.busy {
+	a := buffer.a
+	b := buffer.b
+	if a == b {
 		return nil
 	}
 
-	bCap := buffer.Cap()
-	a := uint(buffer.a)
-	b := uint(buffer.b)
-	if buffer.busy && a >= b {
-		b = bCap
+	x := (b - a)
+	if length > uint(x) {
+		length = uint(x)
 	}
 
-	available := (b - a)
-	if length > available {
-		length = available
-	}
-
-	c := a + length
+	c := a + uint32(length)
 	return buffer.slice[a:c]
 }
 
@@ -290,87 +226,53 @@ func (buffer *Buffer) PrepareBulkRead(length uint) []byte {
 // slice returned by PrepareBulkRead.
 //
 func (buffer *Buffer) CommitBulkRead(length uint) {
-	if length == 0 {
-		return
-	}
+	a := buffer.a
+	b := buffer.b
+	x := (b - a)
+	assert.Assertf(length <= uint(x), "length %d > available bytes %d", length, uint(x))
 
-	bCap := buffer.Cap()
-	bMask := buffer.mask
-	a := uint(buffer.a)
-	b := uint(buffer.b)
-	if buffer.busy && a >= b {
-		b = bCap
-	}
-
-	available := (b - a)
-	assert.Assertf(length <= available, "length %d > available %d", length, available)
-
-	c := a + length
-	buffer.a = uint32(c) & bMask
-	buffer.busy = (buffer.a != buffer.b)
+	c := a + uint32(length)
+	buffer.a = c
 }
 
 // ReadByte reads a single byte from the Buffer.  If the buffer is empty,
 // ErrEmpty is returned.
 func (buffer *Buffer) ReadByte() (byte, error) {
-	if !buffer.busy {
+	a := buffer.a
+	b := buffer.b
+	if a == b {
 		return 0, ErrEmpty
 	}
 
-	bMask := buffer.mask
-	bSlice := buffer.slice
-	aw := buffer.a
-	bw := buffer.b
-	ch := bSlice[aw]
-	aw = (aw + 1) & bMask
-	buffer.a = aw
-	buffer.busy = (aw != bw)
+	ch := buffer.slice[a]
+	buffer.a = a + 1
 	return ch, nil
 }
 
 // Read reads a slice of bytes from the Buffer.  If the buffer is empty,
 // ErrEmpty is returned.
-func (buffer *Buffer) Read(p []byte) (int, error) {
-	pLen := uint(len(p))
-	if pLen == 0 {
+func (buffer *Buffer) Read(data []byte) (int, error) {
+	length := uint(len(data))
+	if length == 0 {
 		return 0, nil
 	}
 
-	if !buffer.busy {
+	a := buffer.a
+	b := buffer.b
+	if a == b {
 		return 0, ErrEmpty
 	}
 
-	bCap := buffer.Cap()
-	bMask := buffer.mask
-	bSlice := buffer.slice
-	aw := buffer.a
-	bw := buffer.b
-	a := uint(aw)
-	b := uint(bw)
-	if aw >= bw {
-		b += bCap
+	x := (b - a)
+	if length > uint(x) {
+		length = uint(x)
+		data = data[:length]
 	}
 
-	bUsed := (b - a)
-	if pLen > bUsed {
-		pLen = bUsed
-		p = p[:pLen]
-	}
-
-	c := a + pLen
-	cw := uint32(c) & bMask
-
-	if aw >= cw {
-		x := (bCap - a)
-		copy(p[:x], bSlice[aw:bCap])
-		copy(p[x:], bSlice[0:cw])
-	} else {
-		copy(p, bSlice[aw:cw])
-	}
-
-	buffer.a = cw
-	buffer.busy = (cw != bw)
-	return int(pLen), nil
+	c := a + uint32(length)
+	copy(data, buffer.slice[a:c])
+	buffer.a = c
+	return int(length), nil
 }
 
 // WriteTo attempts to drain this Buffer by writing to the provided Writer.
@@ -380,104 +282,92 @@ func (buffer *Buffer) WriteTo(w io.Writer) (int64, error) {
 	var total int64
 	var err error
 
-	bCap := buffer.Cap()
+	size := buffer.Size()
 	for err == nil {
-		p := buffer.PrepareBulkRead(bCap)
-		if p == nil {
+		buf := buffer.PrepareBulkRead(size)
+		if buf == nil {
 			break
 		}
 
 		var nn int
-		nn, err = w.Write(p)
+		nn, err = w.Write(buf)
 		assert.Assertf(nn >= 0, "Write() returned %d, which is < 0", nn)
-		assert.Assertf(nn <= len(p), "Write() returned %d, which is > len(buffer) %d", nn, len(p))
+		assert.Assertf(nn <= len(buf), "Write() returned %d, which is > len(buffer) %d", nn, len(buf))
 		buffer.CommitBulkRead(uint(nn))
 		total += int64(nn)
 	}
 	return total, err
 }
 
-// Bytes allocates and returns a copy of the Buffer's contents.
-func (buffer Buffer) Bytes() []byte {
-	bCap := buffer.Cap()
-	bSlice := buffer.slice
-	aw := uint(buffer.a)
-	bw := uint(buffer.b)
-	a := aw
-	b := bw
-	split := false
-	if buffer.busy && aw >= bw {
-		b += bCap
-		split = true
-	}
-	out := make([]byte, b-a)
-	if split {
-		x := (bCap - aw)
-		copy(out[:x], bSlice[aw:bCap])
-		copy(out[x:], bSlice[0:bw])
-	} else {
-		copy(out, bSlice[aw:bw])
-	}
-	return out
+// BytesView returns a slice into the Buffer's contents.
+func (buffer Buffer) BytesView() []byte {
+	a := buffer.a
+	b := buffer.b
+	return buffer.slice[a:b]
 }
 
-// Slices returns zero or more []byte slices which provide a view of the
-// Buffer's contents.  The slices are ordered from oldest to newest, the slices
-// are only valid until the next mutating method call, and the contents of the
-// slices should not be modified.
-func (buffer Buffer) Slices() [][]byte {
-	var out [][]byte
-	if buffer.busy {
-		bCap := buffer.Cap()
-		bSlice := buffer.slice
-		aw := buffer.a
-		bw := buffer.b
-		out = make([][]byte, 0, 2)
-		if aw >= bw {
-			out = append(out, bSlice[aw:bCap])
-			out = append(out, bSlice[0:bw])
-		} else {
-			out = append(out, bSlice[aw:bw])
-		}
-	}
+// Bytes allocates and returns a copy of the Buffer's contents.
+func (buffer Buffer) Bytes() []byte {
+	a := buffer.a
+	b := buffer.b
+	x := (b - a)
+	out := make([]byte, x)
+	copy(out, buffer.slice[a:b])
 	return out
 }
 
 // DebugString returns a detailed dump of the Buffer's internal state.
 func (buffer Buffer) DebugString() string {
-	var buf strings.Builder
-	buf.WriteString("Buffer(a=")
-	buf.WriteString(strconv.FormatUint(uint64(buffer.a), 10))
-	buf.WriteString(",b=")
-	buf.WriteString(strconv.FormatUint(uint64(buffer.b), 10))
-	buf.WriteString(",busy=")
-	buf.WriteString(strconv.FormatBool(buffer.busy))
-	buf.WriteString(",[ ")
-	bCap := buffer.Cap()
-	bMask := buffer.mask
-	bSlice := buffer.slice
-	a := uint(buffer.a)
-	b := uint(buffer.b)
-	if buffer.busy && a >= b {
-		b += bCap
+	buf := takeStringsBuilder()
+	defer giveStringsBuilder(buf)
+
+	nbits := buffer.nbits
+	size := buffer.size
+	a := buffer.a
+	b := buffer.b
+	x := (b - a)
+	slice := buffer.slice
+
+	buf.WriteString("Buffer(")
+	fmt.Fprintf(buf, "nbits=%d, ", nbits)
+	fmt.Fprintf(buf, "size=%d, ", size)
+	fmt.Fprintf(buf, "a=%d, ", a)
+	fmt.Fprintf(buf, "b=%d, ", b)
+	fmt.Fprintf(buf, "len=%d, ", x)
+	buf.WriteString("[")
+	for a < b {
+		ch := slice[a]
+		a++
+		fmt.Fprintf(buf, "%02x ", ch)
 	}
-	for c := a; c < b; c++ {
-		cw := uint32(c) & bMask
-		ch := bSlice[cw]
-		fmt.Fprintf(&buf, "%02x ", ch)
-	}
-	buf.WriteString("])")
+	buf.WriteString(" ])")
 	return buf.String()
 }
 
 // GoString returns a brief dump of the Buffer's internal state.
 func (buffer Buffer) GoString() string {
-	return fmt.Sprintf("Buffer(a=%d,b=%d,cap=%d,busy=%t)", buffer.a, buffer.b, buffer.Cap(), buffer.busy)
+	return fmt.Sprintf("Buffer(size=%d,a=%d,b=%d,len=%d)", buffer.size, buffer.a, buffer.b, buffer.Len())
 }
 
 // String returns a plain-text description of the buffer.
 func (buffer Buffer) String() string {
 	return fmt.Sprintf("(buffer with %d bytes)", buffer.Len())
+}
+
+func (buffer *Buffer) shift(n uint32) {
+	slice := buffer.slice
+	a := buffer.a
+	b := buffer.b
+	c := b + n
+	if c <= uint32(len(slice)) {
+		return
+	}
+
+	x := (b - a)
+	copy(slice[0:x], slice[a:b])
+	bzero.Uint8(slice[x:])
+	buffer.a = 0
+	buffer.b = x
 }
 
 var (
