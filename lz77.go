@@ -11,11 +11,11 @@ import (
 
 const hashLen = 4
 
-// Hybrid implements a combination Window/Buffer that uses the Window to
+// LZ77 implements a combination Window/Buffer that uses the Window to
 // remember bytes that were recently removed from the Buffer, and that hashes
 // all data that enters the Window so that LZ77-style prefix matching can be
 // made efficient.
-type Hybrid struct {
+type LZ77 struct {
 	slice    []byte
 	hashMap  map[uint32]*[]uint32
 	i        uint32
@@ -31,8 +31,8 @@ type Hybrid struct {
 	hbits    byte
 }
 
-// HybridOptions holds options for initializing an instance of Hybrid.
-type HybridOptions struct {
+// LZ77Options holds options for initializing an instance of LZ77.
+type LZ77Options struct {
 	BufferNumBits       uint
 	WindowNumBits       uint
 	HashNumBits         uint
@@ -44,45 +44,55 @@ type HybridOptions struct {
 	HasMaxMatchDistance bool
 }
 
-// NewHybrid is a convenience function that allocates a Hybrid and calls Init on it.
-func NewHybrid(o HybridOptions) *Hybrid {
-	hybrid := new(Hybrid)
-	hybrid.Init(o)
-	return hybrid
+// NewLZ77 is a convenience function that allocates a LZ77 and calls Init on it.
+func NewLZ77(o LZ77Options) *LZ77 {
+	lz77 := new(LZ77)
+	lz77.Init(o)
+	return lz77
 }
 
-// BufferNumBits returns the size of the Buffer in bits.
-func (hybrid Hybrid) BufferNumBits() uint {
-	return uint(hybrid.bbits)
+// BufferNumBits returns the size of the buffer in bits.
+func (lz77 LZ77) BufferNumBits() uint {
+	return uint(lz77.bbits)
 }
 
-// WindowNumBits returns the size of the Window in bits.
-func (hybrid Hybrid) WindowNumBits() uint {
-	return uint(hybrid.wbits)
+// WindowNumBits returns the size of the sliding window in bits.
+func (lz77 LZ77) WindowNumBits() uint {
+	return uint(lz77.wbits)
 }
 
 // HashNumBits returns the size of the hash function output in bits.
-func (hybrid Hybrid) HashNumBits() uint {
-	return uint(hybrid.hbits)
+func (lz77 LZ77) HashNumBits() uint {
+	return uint(lz77.hbits)
 }
 
-// IsEmpty returns true iff the Hybrid's Buffer is empty.
-func (hybrid Hybrid) IsEmpty() bool {
-	return hybrid.i == hybrid.j
+// BufferSize returns the size of the buffer, in bytes.
+func (lz77 LZ77) BufferSize() uint {
+	return uint(lz77.bsize)
 }
 
-// IsFull returns true iff the Hybrid's Buffer is full.
-func (hybrid Hybrid) IsFull() bool {
-	return (hybrid.j - hybrid.i) >= hybrid.bsize
+// WindowSize returns the size of the sliding window, in bytes.
+func (lz77 LZ77) WindowSize() uint {
+	return uint(lz77.wsize)
 }
 
-// Len returns the number of bytes currently in the Hybrid's Buffer.
-func (hybrid Hybrid) Len() uint {
-	return uint(hybrid.j - hybrid.i)
+// IsEmpty returns true iff the buffer is empty.
+func (lz77 LZ77) IsEmpty() bool {
+	return lz77.i == lz77.j
 }
 
-// Init initializes a Hybrid.
-func (hybrid *Hybrid) Init(o HybridOptions) {
+// IsFull returns true iff the buffer is full.
+func (lz77 LZ77) IsFull() bool {
+	return (lz77.j - lz77.i) >= lz77.bsize
+}
+
+// Len returns the number of bytes currently in the LZ77's Buffer.
+func (lz77 LZ77) Len() uint {
+	return uint(lz77.j - lz77.i)
+}
+
+// Init initializes a LZ77.
+func (lz77 *LZ77) Init(o LZ77Options) {
 	bbits := o.BufferNumBits
 	wbits := o.WindowNumBits
 	hbits := o.HashNumBits
@@ -141,7 +151,7 @@ func (hybrid *Hybrid) Init(o HybridOptions) {
 		hashMask = (uint32(1) << hbits) - 1
 	}
 
-	*hybrid = Hybrid{
+	*lz77 = LZ77{
 		slice:    make([]byte, wsize+bsize*2),
 		hashMap:  nil,
 		i:        wsize,
@@ -158,36 +168,36 @@ func (hybrid *Hybrid) Init(o HybridOptions) {
 	}
 
 	if hbits != 0 {
-		hybrid.hashMap = make(map[uint32]*[]uint32, maxDist)
-		hybrid.windowUpdateRegion(0)
+		lz77.hashMap = make(map[uint32]*[]uint32, maxDist)
+		lz77.windowUpdateRegion(0)
 	}
 }
 
-// Clear clears all data in the entire Hybrid.
-func (hybrid *Hybrid) Clear() {
-	wsize := hybrid.wsize
-	hybrid.i = wsize
-	hybrid.j = wsize
-	bzero.Uint8(hybrid.slice[wsize:])
-	hybrid.WindowClear()
+// Clear clears all data, emptying the buffer and zeroing out the sliding window.
+func (lz77 *LZ77) Clear() {
+	wsize := lz77.wsize
+	lz77.i = wsize
+	lz77.j = wsize
+	bzero.Uint8(lz77.slice[wsize:])
+	lz77.WindowClear()
 }
 
-// WindowClear clears just the data in the Hybrid's Window.
-func (hybrid *Hybrid) WindowClear() {
-	wsize := hybrid.wsize
-	i := hybrid.i
+// WindowClear zeroes out the sliding window.
+func (lz77 *LZ77) WindowClear() {
+	wsize := lz77.wsize
+	i := lz77.i
 	start := (i - wsize)
 
-	bzero.Uint8(hybrid.slice[start:i])
-	for _, ptr := range hybrid.hashMap {
+	bzero.Uint8(lz77.slice[start:i])
+	for _, ptr := range lz77.hashMap {
 		*ptr = []uint32(nil)
 	}
-	hybrid.windowUpdateRegion(start)
+	lz77.windowUpdateRegion(start)
 }
 
-// SetWindow replaces the Hybrid's Window with the given data.
-func (hybrid *Hybrid) SetWindow(data []byte) {
-	wsize := hybrid.wsize
+// SetWindow replaces the sliding window with the given data.
+func (lz77 *LZ77) SetWindow(data []byte) {
+	wsize := lz77.wsize
 
 	length := uint(len(data))
 	if length > uint(wsize) {
@@ -196,35 +206,35 @@ func (hybrid *Hybrid) SetWindow(data []byte) {
 		length = uint(wsize)
 	}
 
-	i := hybrid.i
+	i := lz77.i
 	start := (i - wsize)
 	offset := (i - uint32(length))
 
-	slice := hybrid.slice
+	slice := lz77.slice
 	bzero.Uint8(slice[start:offset])
 	copy(slice[offset:i], data)
-	for _, ptr := range hybrid.hashMap {
+	for _, ptr := range lz77.hashMap {
 		*ptr = []uint32(nil)
 	}
-	hybrid.windowUpdateRegion(start)
+	lz77.windowUpdateRegion(start)
 }
 
-// DebugString returns a detailed dump of the Hybrid's internal state.
-func (hybrid Hybrid) DebugString() string {
+// DebugString returns a detailed dump of the LZ77's internal state.
+func (lz77 LZ77) DebugString() string {
 	buf := takeStringsBuilder()
 	defer giveStringsBuilder(buf)
 
-	buf.WriteString("Hybrid(\n")
+	buf.WriteString("LZ77(\n")
 
-	bsize := hybrid.bsize
-	wsize := hybrid.wsize
-	minLen := hybrid.minLen
-	maxLen := hybrid.maxLen
-	maxDist := hybrid.maxDist
+	bsize := lz77.bsize
+	wsize := lz77.wsize
+	minLen := lz77.minLen
+	maxLen := lz77.maxLen
+	maxDist := lz77.maxDist
 
-	slice := hybrid.slice
-	i := hybrid.i
-	j := hybrid.j
+	slice := lz77.slice
+	i := lz77.i
+	j := lz77.j
 	n := uint32(len(slice))
 
 	start := (i - wsize)
@@ -232,13 +242,13 @@ func (hybrid Hybrid) DebugString() string {
 	used := (j - i)
 
 	fmt.Fprintf(buf, "\tcapacity = %d\n", n)
-	fmt.Fprintf(buf, "\tbbits = %d\n", hybrid.bbits)
-	fmt.Fprintf(buf, "\twbits = %d\n", hybrid.wbits)
-	fmt.Fprintf(buf, "\thbits = %d\n", hybrid.hbits)
+	fmt.Fprintf(buf, "\tbbits = %d\n", lz77.bbits)
+	fmt.Fprintf(buf, "\twbits = %d\n", lz77.wbits)
+	fmt.Fprintf(buf, "\thbits = %d\n", lz77.hbits)
 	fmt.Fprintf(buf, "\tminLen = %d\n", minLen)
 	fmt.Fprintf(buf, "\tmaxLen = %d\n", maxLen)
 	fmt.Fprintf(buf, "\tmaxDist = %d\n", maxDist)
-	fmt.Fprintf(buf, "\thashMask = %#08x\n", hybrid.hashMask)
+	fmt.Fprintf(buf, "\thashMask = %#08x\n", lz77.hashMask)
 	fmt.Fprintf(buf, "\tbCap = %d\n", bsize)
 	fmt.Fprintf(buf, "\twCap = %d\n", wsize)
 	fmt.Fprintf(buf, "\ti = %d\n", i)
@@ -253,7 +263,7 @@ func (hybrid Hybrid) DebugString() string {
 		if index == i {
 			prefix = " |"
 		}
-		ch := hybrid.slice[index]
+		ch := lz77.slice[index]
 		fmt.Fprintf(buf, "%s %02x", prefix, ch)
 	}
 	if i == j {
@@ -261,17 +271,17 @@ func (hybrid Hybrid) DebugString() string {
 	}
 	buf.WriteString(" ]\n")
 
-	if hybrid.hashMap != nil {
+	if lz77.hashMap != nil {
 		buf.WriteString("\thashList = [")
 
-		hashes := make([]uint32, 0, len(hybrid.hashMap))
-		for hash := range hybrid.hashMap {
+		hashes := make([]uint32, 0, len(lz77.hashMap))
+		for hash := range lz77.hashMap {
 			hashes = append(hashes, hash)
 		}
 		sort.Sort(byUint32(hashes))
 
 		for _, hash := range hashes {
-			ptr := hybrid.hashMap[hash]
+			ptr := lz77.hashMap[hash]
 			matches := *ptr
 			matchesLen := uint(len(matches))
 			x := uint(0)
@@ -295,41 +305,41 @@ func (hybrid Hybrid) DebugString() string {
 	return buf.String()
 }
 
-// GoString returns a brief dump of the Hybrid's internal state.
-func (hybrid Hybrid) GoString() string {
+// GoString returns a brief dump of the LZ77's internal state.
+func (lz77 LZ77) GoString() string {
 	buf := takeStringsBuilder()
 	defer giveStringsBuilder(buf)
 
-	buf.WriteString("Hybrid(")
-	fmt.Fprintf(buf, "bbits=%d, ", hybrid.bbits)
-	fmt.Fprintf(buf, "wbits=%d, ", hybrid.wbits)
-	fmt.Fprintf(buf, "hbits=%d, ", hybrid.hbits)
-	fmt.Fprintf(buf, "minLen=%d, ", hybrid.minLen)
-	fmt.Fprintf(buf, "maxLen=%d, ", hybrid.maxLen)
-	fmt.Fprintf(buf, "maxDist=%d, ", hybrid.maxDist)
-	fmt.Fprintf(buf, "bsize=%d, ", hybrid.bsize)
-	fmt.Fprintf(buf, "wsize=%d, ", hybrid.wsize)
-	fmt.Fprintf(buf, "i=%d, ", hybrid.i)
-	fmt.Fprintf(buf, "j=%d, ", hybrid.j)
-	fmt.Fprintf(buf, "start=%d, ", hybrid.i-hybrid.wsize)
-	fmt.Fprintf(buf, "matchStart=%d", hybrid.i-hybrid.maxDist)
+	buf.WriteString("LZ77(")
+	fmt.Fprintf(buf, "bbits=%d, ", lz77.bbits)
+	fmt.Fprintf(buf, "wbits=%d, ", lz77.wbits)
+	fmt.Fprintf(buf, "hbits=%d, ", lz77.hbits)
+	fmt.Fprintf(buf, "minLen=%d, ", lz77.minLen)
+	fmt.Fprintf(buf, "maxLen=%d, ", lz77.maxLen)
+	fmt.Fprintf(buf, "maxDist=%d, ", lz77.maxDist)
+	fmt.Fprintf(buf, "bsize=%d, ", lz77.bsize)
+	fmt.Fprintf(buf, "wsize=%d, ", lz77.wsize)
+	fmt.Fprintf(buf, "i=%d, ", lz77.i)
+	fmt.Fprintf(buf, "j=%d, ", lz77.j)
+	fmt.Fprintf(buf, "start=%d, ", lz77.i-lz77.wsize)
+	fmt.Fprintf(buf, "matchStart=%d", lz77.i-lz77.maxDist)
 	buf.WriteString(")")
 
 	return buf.String()
 }
 
-// String returns a plain-text description of the Hybrid.
-func (hybrid Hybrid) String() string {
-	return fmt.Sprintf("(window-buffer with %d bytes in the buffer)", hybrid.Len())
+// String returns a plain-text description of the LZ77.
+func (lz77 LZ77) String() string {
+	return fmt.Sprintf("(window-buffer with %d bytes in the buffer)", lz77.Len())
 }
 
 // PrepareBulkWrite obtains a slice into which the caller can write bytes.  See
 // Buffer.PrepareBulkWrite for more details.
 //
-func (hybrid *Hybrid) PrepareBulkWrite(length uint) []byte {
-	bsize := hybrid.bsize
-	i := hybrid.i
-	j := hybrid.j
+func (lz77 *LZ77) PrepareBulkWrite(length uint) []byte {
+	bsize := lz77.bsize
+	i := lz77.i
+	j := lz77.j
 	x := (j - i)
 	y := bsize - x
 
@@ -337,34 +347,34 @@ func (hybrid *Hybrid) PrepareBulkWrite(length uint) []byte {
 		length = uint(y)
 	}
 
-	hybrid.shift(uint32(length))
-	j = hybrid.j
+	lz77.shift(uint32(length))
+	j = lz77.j
 	k := j + uint32(length)
-	return hybrid.slice[j:k]
+	return lz77.slice[j:k]
 }
 
 // CommitBulkWrite completes the bulk write begun by the previous call to
 // PrepareBulkWrite.  The argument must be between 0 and the length of the
 // slice returned by PrepareBulkWrite.
 //
-func (hybrid *Hybrid) CommitBulkWrite(length uint) {
-	bsize := hybrid.bsize
-	i := hybrid.i
-	j := hybrid.j
+func (lz77 *LZ77) CommitBulkWrite(length uint) {
+	bsize := lz77.bsize
+	i := lz77.i
+	j := lz77.j
 	x := (j - i)
 	y := bsize - x
 
 	assert.Assertf(length <= uint(y), "length %d > available space %d", length, uint(y))
 
-	hybrid.j = j + uint32(length)
-	hybrid.windowUpdateRegion(j - hashLen)
+	lz77.j = j + uint32(length)
+	lz77.windowUpdateRegion(j - hashLen)
 }
 
-// WriteByte writes a single byte to the Hybrid's Buffer.
-func (hybrid *Hybrid) WriteByte(ch byte) error {
-	bsize := hybrid.bsize
-	i := hybrid.i
-	j := hybrid.j
+// WriteByte writes a single byte to the LZ77's Buffer.
+func (lz77 *LZ77) WriteByte(ch byte) error {
+	bsize := lz77.bsize
+	i := lz77.i
+	j := lz77.j
 	x := (j - i)
 	y := bsize - x
 
@@ -372,19 +382,19 @@ func (hybrid *Hybrid) WriteByte(ch byte) error {
 		return ErrFull
 	}
 
-	hybrid.shift(1)
-	j = hybrid.j
-	hybrid.slice[j] = ch
-	hybrid.j = j + 1
-	hybrid.windowUpdateRegion(j - hashLen)
+	lz77.shift(1)
+	j = lz77.j
+	lz77.slice[j] = ch
+	lz77.j = j + 1
+	lz77.windowUpdateRegion(j - hashLen)
 	return nil
 }
 
-// Write writes a slice of bytes to the Hybrid's Buffer.
-func (hybrid *Hybrid) Write(data []byte) (int, error) {
-	bsize := hybrid.bsize
-	i := hybrid.i
-	j := hybrid.j
+// Write writes a slice of bytes to the LZ77's Buffer.
+func (lz77 *LZ77) Write(data []byte) (int, error) {
+	bsize := lz77.bsize
+	i := lz77.i
+	j := lz77.j
 	x := (j - i)
 	y := bsize - x
 
@@ -396,86 +406,86 @@ func (hybrid *Hybrid) Write(data []byte) (int, error) {
 		err = ErrFull
 	}
 
-	hybrid.shift(uint32(length))
-	j = hybrid.j
+	lz77.shift(uint32(length))
+	j = lz77.j
 	k := j + uint32(length)
-	copy(hybrid.slice[j:k], data)
-	hybrid.j = k
-	hybrid.windowUpdateRegion(j - hashLen)
+	copy(lz77.slice[j:k], data)
+	lz77.j = k
+	lz77.windowUpdateRegion(j - hashLen)
 	return int(length), err
 }
 
 // PrepareBulkRead obtains a slice from which the caller can read bytes.  See
 // Buffer.PrepareBulkRead for more details.
 //
-func (hybrid *Hybrid) PrepareBulkRead(length uint) []byte {
-	bsize := hybrid.bsize
+func (lz77 *LZ77) PrepareBulkRead(length uint) []byte {
+	bsize := lz77.bsize
 	if length > uint(bsize) {
 		length = uint(bsize)
 	}
 
-	i := hybrid.i
-	j := hybrid.j
+	i := lz77.i
+	j := lz77.j
 	k := i + uint32(length)
 	if k > j {
 		k = j
 	}
 
-	return hybrid.slice[i:k]
+	return lz77.slice[i:k]
 }
 
 // CommitBulkRead completes the bulk read begun by the previous call to
 // PrepareBulkRead.  The argument must be between 0 and the length of the
 // slice returned by PrepareBulkRead.
 //
-func (hybrid *Hybrid) CommitBulkRead(length uint) {
-	bsize := hybrid.bsize
+func (lz77 *LZ77) CommitBulkRead(length uint) {
+	bsize := lz77.bsize
 	if length > uint(bsize) {
 		length = uint(bsize)
 	}
 
-	i := hybrid.i
-	j := hybrid.j
+	i := lz77.i
+	j := lz77.j
 	k := i + uint32(length)
 
 	assert.Assertf(k <= j, "length %d exceeds %d bytes of available data", length, j-i)
 
-	hybrid.i = k
-	hybrid.windowUpdateRegion(i)
+	lz77.i = k
+	lz77.windowUpdateRegion(i)
 }
 
 // ReadByte reads a single byte, or returns ErrEmpty if the buffer is empty.
-func (hybrid *Hybrid) ReadByte() (byte, error) {
-	i := hybrid.i
-	j := hybrid.j
+func (lz77 *LZ77) ReadByte() (byte, error) {
+	i := lz77.i
+	j := lz77.j
 	k := i + 1
 
 	if k > j {
 		return 0, ErrEmpty
 	}
 
-	ch := hybrid.slice[i]
-	hybrid.i = k
-	hybrid.windowUpdateRegion(i)
+	ch := lz77.slice[i]
+	lz77.i = k
+	lz77.windowUpdateRegion(i)
 	return ch, nil
 }
 
-// Read reads a slice of bytes from the Hybrid's Buffer.  If the buffer is
+// Read reads a slice of bytes from the LZ77's Buffer.  If the buffer is
 // empty, ErrEmpty is returned.
-func (hybrid *Hybrid) Read(data []byte) (int, error) {
+func (lz77 *LZ77) Read(data []byte) (int, error) {
 	length := uint(len(data))
 	if length == 0 {
 		return 0, nil
 	}
 
-	bsize := hybrid.bsize
+	bsize := lz77.bsize
 	if length > uint(bsize) {
 		length = uint(bsize)
 		data = data[:length]
 	}
 
-	i := hybrid.i
-	j := hybrid.j
+	i := lz77.i
+	j := lz77.j
 	k := i + uint32(length)
 	if k > j {
 		k = j
@@ -486,25 +496,25 @@ func (hybrid *Hybrid) Read(data []byte) (int, error) {
 		}
 	}
 
-	copy(data, hybrid.slice[i:k])
-	hybrid.i = k
-	hybrid.windowUpdateRegion(i)
+	copy(data, lz77.slice[i:k])
+	lz77.i = k
+	lz77.windowUpdateRegion(i)
 	return int(length), nil
 }
 
-// Advance moves a slice of bytes from the Hybrid's Buffer to its Window.  The
-// nature of the slice depends on the Hybrid's prefix match settings, the
-// contents of the Hybrid's Window, and the contents of the Hybrid's Buffer.
-func (hybrid *Hybrid) Advance() (buf []byte, matchDistance uint, matchLength uint, matchFound bool) {
-	i := hybrid.i
-	j := hybrid.j
-	n := uint32(len(hybrid.slice))
-	bsize := hybrid.bsize
-	wsize := hybrid.wsize
-	minLen := hybrid.minLen
-	maxLen := hybrid.maxLen
-	maxDist := hybrid.maxDist
-	hbits := hybrid.hbits
+// Advance moves a slice of bytes from the LZ77's Buffer to its Window.  The
+// nature of the slice depends on the LZ77's prefix match settings, the
+// contents of the LZ77's Window, and the contents of the LZ77's Buffer.
+func (lz77 *LZ77) Advance() (buf []byte, matchDistance uint, matchLength uint, matchFound bool) {
+	i := lz77.i
+	j := lz77.j
+	n := uint32(len(lz77.slice))
+	bsize := lz77.bsize
+	wsize := lz77.wsize
+	minLen := lz77.minLen
+	maxLen := lz77.maxLen
+	maxDist := lz77.maxDist
+	hbits := lz77.hbits
 
 	assert.Assertf(i <= j, "i %d > j %d", i, j)
 	assert.Assertf(j <= n, "j %d > n %d", j, n)
@@ -522,43 +532,43 @@ func (hybrid *Hybrid) Advance() (buf []byte, matchDistance uint, matchLength uin
 	}
 
 	if hbits == 0 {
-		assert.Assert(hybrid.hashMap == nil, "hashMap is unexpectedly non-nil")
+		assert.Assert(lz77.hashMap == nil, "hashMap is unexpectedly non-nil")
 	} else {
 		assert.Assertf(minLen >= hashLen, "minLen %d > hashLen %d", minLen, hashLen)
-		assert.NotNil(&hybrid.hashMap)
+		assert.NotNil(&lz77.hashMap)
 	}
 
 	switch {
-	case hybrid.maxLen == 0:
-		return hybrid.advanceByte()
-	case hybrid.hbits == 0:
-		return hybrid.advanceNoHash()
+	case lz77.maxLen == 0:
+		return lz77.advanceByte()
+	case lz77.hbits == 0:
+		return lz77.advanceNoHash()
 	default:
-		return hybrid.advanceStandard()
+		return lz77.advanceStandard()
 	}
 }
 
-func (hybrid *Hybrid) advanceByte() (buf []byte, matchDistance uint, matchLength uint, matchFound bool) {
-	i := hybrid.i
-	j := hybrid.j
+func (lz77 *LZ77) advanceByte() (buf []byte, matchDistance uint, matchLength uint, matchFound bool) {
+	i := lz77.i
+	j := lz77.j
 	k := i + 1
 	if k > j {
 		return
 	}
 
-	buf = hybrid.slice[i:k]
-	hybrid.i = k
-	hybrid.windowUpdateRegion(i)
+	buf = lz77.slice[i:k]
+	lz77.i = k
+	lz77.windowUpdateRegion(i)
 	return
 }
 
-func (hybrid *Hybrid) advanceNoHash() (buf []byte, matchDistance uint, matchLength uint, matchFound bool) {
-	slice := hybrid.slice
-	i := hybrid.i
-	j := hybrid.j
-	wsize := hybrid.wsize
-	minLen := hybrid.minLen
-	maxLen := hybrid.maxLen
+func (lz77 *LZ77) advanceNoHash() (buf []byte, matchDistance uint, matchLength uint, matchFound bool) {
+	slice := lz77.slice
+	i := lz77.i
+	j := lz77.j
+	wsize := lz77.wsize
+	minLen := lz77.minLen
+	maxLen := lz77.maxLen
 
 	k := i + 1
 	if k > j {
@@ -571,8 +581,8 @@ func (hybrid *Hybrid) advanceNoHash() (buf []byte, matchDistance uint, matchLeng
 	}
 	if maxLen < minLen {
 		buf = slice[i:k]
-		hybrid.i = k
-		hybrid.windowUpdateRegion(i)
+		lz77.i = k
+		lz77.windowUpdateRegion(i)
 		return
 	}
 
@@ -613,18 +623,18 @@ func (hybrid *Hybrid) advanceNoHash() (buf []byte, matchDistance uint, matchLeng
 	}
 
 	buf = slice[i:k]
-	hybrid.i = k
-	hybrid.windowUpdateRegion(i)
+	lz77.i = k
+	lz77.windowUpdateRegion(i)
 	return
 }
 
-func (hybrid *Hybrid) advanceStandard() (buf []byte, matchDistance uint, matchLength uint, matchFound bool) {
-	slice := hybrid.slice
-	i := hybrid.i
-	j := hybrid.j
-	minLen := hybrid.minLen
-	maxLen := hybrid.maxLen
-	maxDist := hybrid.maxDist
+func (lz77 *LZ77) advanceStandard() (buf []byte, matchDistance uint, matchLength uint, matchFound bool) {
+	slice := lz77.slice
+	i := lz77.i
+	j := lz77.j
+	minLen := lz77.minLen
+	maxLen := lz77.maxLen
+	maxDist := lz77.maxDist
 
 	k := i + 1
 	if k > j {
@@ -641,8 +651,8 @@ func (hybrid *Hybrid) advanceStandard() (buf []byte, matchDistance uint, matchLe
 
 	if maxLen >= minLen {
 		matchStart := i - maxDist
-		hash := hash4(slice[i:i+hashLen], hybrid.hashMask)
-		ptr := hybrid.hashMap[hash]
+		hash := hash4(slice[i:i+hashLen], lz77.hashMask)
+		ptr := lz77.hashMap[hash]
 		if ptr != nil {
 			matches := *ptr
 			matchIndex := uint(len(matches))
@@ -685,21 +695,21 @@ func (hybrid *Hybrid) advanceStandard() (buf []byte, matchDistance uint, matchLe
 	}
 
 	buf = slice[i:k]
-	hybrid.i = uint32(k)
-	hybrid.windowUpdateRegion(i)
+	lz77.i = uint32(k)
+	lz77.windowUpdateRegion(i)
 	return
 }
 
-func (hybrid *Hybrid) windowUpdateRegion(index uint32) {
-	if hybrid.hashMap == nil {
+func (lz77 *LZ77) windowUpdateRegion(index uint32) {
+	if lz77.hashMap == nil {
 		return
 	}
 
-	slice := hybrid.slice
-	i := hybrid.i
-	j := hybrid.j
+	slice := lz77.slice
+	i := lz77.i
+	j := lz77.j
 
-	matchStart := i - hybrid.maxDist
+	matchStart := i - lz77.maxDist
 	if index < matchStart {
 		index = matchStart
 	}
@@ -710,10 +720,10 @@ func (hybrid *Hybrid) windowUpdateRegion(index uint32) {
 	}
 
 	for index < end {
-		hash := hash4(slice[index:index+hashLen], hybrid.hashMask)
+		hash := hash4(slice[index:index+hashLen], lz77.hashMask)
 
 		var matches []uint32
-		ptr := hybrid.hashMap[hash]
+		ptr := lz77.hashMap[hash]
 		if ptr != nil {
 			matches = *ptr
 		}
@@ -747,7 +757,7 @@ func (hybrid *Hybrid) windowUpdateRegion(index uint32) {
 		if ptr == nil {
 			ptr = new([]uint32)
 			*ptr = matches
-			hybrid.hashMap[hash] = ptr
+			lz77.hashMap[hash] = ptr
 		} else {
 			*ptr = matches
 		}
@@ -756,11 +766,11 @@ func (hybrid *Hybrid) windowUpdateRegion(index uint32) {
 	}
 }
 
-func (hybrid *Hybrid) shift(n uint32) {
-	wsize := hybrid.wsize
-	slice := hybrid.slice
-	i := hybrid.i
-	j := hybrid.j
+func (lz77 *LZ77) shift(n uint32) {
+	wsize := lz77.wsize
+	slice := lz77.slice
+	i := lz77.i
+	j := lz77.j
 	k := j + n
 	if k <= uint32(len(slice)) {
 		return
@@ -770,10 +780,10 @@ func (hybrid *Hybrid) shift(n uint32) {
 	x := (j - start)
 	copy(slice[0:x], slice[start:j])
 	bzero.Uint8(slice[x:])
-	hybrid.i = wsize
-	hybrid.j = x
+	lz77.i = wsize
+	lz77.j = x
 
-	for _, ptr := range hybrid.hashMap {
+	for _, ptr := range lz77.hashMap {
 		matches := *ptr
 		matchesLen := uint(len(matches))
 		var a, b uint
@@ -789,24 +799,24 @@ func (hybrid *Hybrid) shift(n uint32) {
 	}
 }
 
-// Options returns a HybridOptions struct which can be used to construct a new
-// Hybrid with the same settings.
-func (hybrid Hybrid) Options() HybridOptions {
-	return HybridOptions{
-		BufferNumBits:       uint(hybrid.bbits),
-		WindowNumBits:       uint(hybrid.wbits),
-		HashNumBits:         uint(hybrid.hbits),
-		MinMatchLength:      uint(hybrid.minLen),
-		MaxMatchLength:      uint(hybrid.maxLen),
-		MaxMatchDistance:    uint(hybrid.maxDist),
+// Options returns a LZ77Options struct which can be used to construct a new
+// LZ77 with the same settings.
+func (lz77 LZ77) Options() LZ77Options {
+	return LZ77Options{
+		BufferNumBits:       uint(lz77.bbits),
+		WindowNumBits:       uint(lz77.wbits),
+		HashNumBits:         uint(lz77.hbits),
+		MinMatchLength:      uint(lz77.minLen),
+		MaxMatchLength:      uint(lz77.maxLen),
+		MaxMatchDistance:    uint(lz77.maxDist),
 		HasMinMatchLength:   true,
 		HasMaxMatchLength:   true,
 		HasMaxMatchDistance: true,
 	}
 }
 
-// Equal returns true iff the given HybridOptions is semantically equal to this one.
-func (opts HybridOptions) Equal(other HybridOptions) bool {
+// Equal returns true iff the given LZ77Options is semantically equal to this one.
+func (opts LZ77Options) Equal(other LZ77Options) bool {
 	ok := true
 	ok = ok && (opts.BufferNumBits == other.BufferNumBits)
 	ok = ok && (opts.WindowNumBits == other.WindowNumBits)

@@ -1,4 +1,4 @@
-// Package buffer provides multiple byte buffer implementations.
+// Package buffer provides high-performance byte buffer types.
 package buffer
 
 import (

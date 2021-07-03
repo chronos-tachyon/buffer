@@ -5,9 +5,9 @@ import (
 	"testing"
 )
 
-func TestHybrid(t *testing.T) {
-	var hybrid Hybrid
-	hybrid.Init(HybridOptions{
+func TestLZ77(t *testing.T) {
+	var lz77 LZ77
+	lz77.Init(LZ77Options{
 		WindowNumBits:     3,
 		BufferNumBits:     4,
 		HashNumBits:       8,
@@ -15,7 +15,7 @@ func TestHybrid(t *testing.T) {
 		HasMaxMatchLength: true,
 	})
 
-	nn, err := hybrid.Write([]byte("0123456789abcdef"))
+	nn, err := lz77.Write([]byte("0123456789abcdef"))
 	if err != nil {
 		t.Fatalf("Write failed unexpectedly: %v", err)
 	}
@@ -23,10 +23,10 @@ func TestHybrid(t *testing.T) {
 		t.Fatalf("Write returned wrong length: expect 16, got %d", nn)
 	}
 
-	hybrid.SetWindow([]byte("cdef0123"))
+	lz77.SetWindow([]byte("cdef0123"))
 
 	expectDebug := strings.Join([]string{
-		"Hybrid(\n",
+		"LZ77(\n",
 		"\tcapacity = 40\n",
 		"\tbbits = 4\n",
 		"\twbits = 3\n",
@@ -46,12 +46,12 @@ func TestHybrid(t *testing.T) {
 		"\thashList = [ 0x003d:[7] 0x0055:[2] 0x0071:[0] 0x0087:[6] 0x00bd:[5] 0x00c4:[3] 0x00d1:[4] 0x00e0:[1] ]\n",
 		")\n",
 	}, "")
-	actualDebug := hybrid.DebugString()
+	actualDebug := lz77.DebugString()
 	if actualDebug != expectDebug {
 		t.Errorf("DebugString returned unexpected result.\n\tExpect: %s\n\tActual: %s", expectDebug, actualDebug)
 	}
 
-	buf, bestDistance, bestLength, bestFound := hybrid.Advance()
+	buf, bestDistance, bestLength, bestFound := lz77.Advance()
 	str := string(buf)
 	if str != "0123" || bestDistance != 4 || bestLength != 4 || bestFound != true {
 		t.Errorf(
@@ -62,7 +62,7 @@ func TestHybrid(t *testing.T) {
 	}
 
 	expectDebug = strings.Join([]string{
-		"Hybrid(\n",
+		"LZ77(\n",
 		"\tcapacity = 40\n",
 		"\tbbits = 4\n",
 		"\twbits = 3\n",
@@ -82,13 +82,13 @@ func TestHybrid(t *testing.T) {
 		"\thashList = [ 0x0005:[10] 0x003d:[7] 0x0087:[6] 0x009a:[11] 0x009d:[9] 0x00bd:[5] 0x00d1:[4 8] ]\n",
 		")\n",
 	}, "")
-	actualDebug = hybrid.DebugString()
+	actualDebug = lz77.DebugString()
 	if actualDebug != expectDebug {
 		t.Errorf("DebugString returned unexpected result.\n\tExpect: %s\n\tActual: %s", expectDebug, actualDebug)
 	}
 
-	hybrid.Clear()
-	nn, err = hybrid.Write([]byte("0123012301230123"))
+	lz77.Clear()
+	nn, err = lz77.Write([]byte("0123012301230123"))
 	if err != nil {
 		t.Fatalf("Write failed unexpectedly: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestHybrid(t *testing.T) {
 	}
 
 	expectDebug = strings.Join([]string{
-		"Hybrid(\n",
+		"LZ77(\n",
 		"\tcapacity = 40\n",
 		"\tbbits = 4\n",
 		"\twbits = 3\n",
@@ -117,12 +117,12 @@ func TestHybrid(t *testing.T) {
 		"\thashList = [ 0x0037:[7] 0x00d0:[0 1 2 3 4] 0x00d8:[6] 0x00fb:[5] ]\n",
 		")\n",
 	}, "")
-	actualDebug = hybrid.DebugString()
+	actualDebug = lz77.DebugString()
 	if actualDebug != expectDebug {
 		t.Errorf("DebugString returned unexpected result.\n\tExpect: %s\n\tActual: %s", expectDebug, actualDebug)
 	}
 
-	buf, bestDistance, bestLength, bestFound = hybrid.Advance()
+	buf, bestDistance, bestLength, bestFound = lz77.Advance()
 	str = string(buf)
 	if str != "0" || bestDistance != 0 || bestLength != 0 || bestFound != false {
 		t.Errorf(
@@ -132,7 +132,7 @@ func TestHybrid(t *testing.T) {
 		)
 	}
 
-	buf, bestDistance, bestLength, bestFound = hybrid.Advance()
+	buf, bestDistance, bestLength, bestFound = lz77.Advance()
 	str = string(buf)
 	if str != "1" || bestDistance != 0 || bestLength != 0 || bestFound != false {
 		t.Errorf(
@@ -142,7 +142,7 @@ func TestHybrid(t *testing.T) {
 		)
 	}
 
-	buf, bestDistance, bestLength, bestFound = hybrid.Advance()
+	buf, bestDistance, bestLength, bestFound = lz77.Advance()
 	str = string(buf)
 	if str != "2" || bestDistance != 0 || bestLength != 0 || bestFound != false {
 		t.Errorf(
@@ -152,7 +152,7 @@ func TestHybrid(t *testing.T) {
 		)
 	}
 
-	buf, bestDistance, bestLength, bestFound = hybrid.Advance()
+	buf, bestDistance, bestLength, bestFound = lz77.Advance()
 	str = string(buf)
 	if str != "3" || bestDistance != 0 || bestLength != 0 || bestFound != false {
 		t.Errorf(
@@ -163,7 +163,7 @@ func TestHybrid(t *testing.T) {
 	}
 
 	expectDebug = strings.Join([]string{
-		"Hybrid(\n",
+		"LZ77(\n",
 		"\tcapacity = 40\n",
 		"\tbbits = 4\n",
 		"\twbits = 3\n",
@@ -183,12 +183,12 @@ func TestHybrid(t *testing.T) {
 		"\thashList = [ 0x0037:[7] 0x003d:[11] 0x0087:[10] 0x00bd:[9] 0x00d0:[4] 0x00d1:[8] 0x00d8:[6] 0x00fb:[5] ]\n",
 		")\n",
 	}, "")
-	actualDebug = hybrid.DebugString()
+	actualDebug = lz77.DebugString()
 	if actualDebug != expectDebug {
 		t.Errorf("DebugString returned unexpected result.\n\tExpect: %s\n\tActual: %s", expectDebug, actualDebug)
 	}
 
-	buf, bestDistance, bestLength, bestFound = hybrid.Advance()
+	buf, bestDistance, bestLength, bestFound = lz77.Advance()
 	str = string(buf)
 	if str != "01230123" || bestDistance != 4 || bestLength != 8 || bestFound != true {
 		t.Errorf(
@@ -199,7 +199,7 @@ func TestHybrid(t *testing.T) {
 	}
 
 	expectDebug = strings.Join([]string{
-		"Hybrid(\n",
+		"LZ77(\n",
 		"\tcapacity = 40\n",
 		"\tbbits = 4\n",
 		"\twbits = 3\n",
@@ -219,63 +219,63 @@ func TestHybrid(t *testing.T) {
 		"\thashList = [ 0x003d:[15 19] 0x0087:[14 18] 0x00bd:[13 17] 0x00d1:[12 16] ]\n",
 		")\n",
 	}, "")
-	actualDebug = hybrid.DebugString()
+	actualDebug = lz77.DebugString()
 	if actualDebug != expectDebug {
 		t.Errorf("DebugString returned unexpected result.\n\tExpect: %s\n\tActual: %s", expectDebug, actualDebug)
 	}
 }
 
-func BenchmarkHybrid_WriteByte_8_8(b *testing.B) {
-	var hybrid Hybrid
-	hybrid.Init(HybridOptions{
+func BenchmarkLZ77_WriteByte_8_8(b *testing.B) {
+	var lz77 LZ77
+	lz77.Init(LZ77Options{
 		BufferNumBits: 8,
 		WindowNumBits: 8,
 		HashNumBits:   24,
 	})
 	for n := 0; n < b.N; n++ {
-		err := hybrid.WriteByte('a')
+		err := lz77.WriteByte('a')
 		if err == ErrFull {
-			tmp := hybrid.PrepareBulkRead(1 << 8)
-			hybrid.CommitBulkRead(uint(len(tmp)))
+			tmp := lz77.PrepareBulkRead(1 << 8)
+			lz77.CommitBulkRead(uint(len(tmp)))
 		}
 	}
 }
 
-func BenchmarkHybrid_WriteByte_8_16(b *testing.B) {
-	var hybrid Hybrid
-	hybrid.Init(HybridOptions{
+func BenchmarkLZ77_WriteByte_8_16(b *testing.B) {
+	var lz77 LZ77
+	lz77.Init(LZ77Options{
 		BufferNumBits: 16,
 		WindowNumBits: 8,
 		HashNumBits:   24,
 	})
 	for n := 0; n < b.N; n++ {
-		err := hybrid.WriteByte('a')
+		err := lz77.WriteByte('a')
 		if err == ErrFull {
-			tmp := hybrid.PrepareBulkRead(1 << 16)
-			hybrid.CommitBulkRead(uint(len(tmp)))
+			tmp := lz77.PrepareBulkRead(1 << 16)
+			lz77.CommitBulkRead(uint(len(tmp)))
 		}
 	}
 }
 
-func BenchmarkHybrid_WriteByte_15_16(b *testing.B) {
-	var hybrid Hybrid
-	hybrid.Init(HybridOptions{
+func BenchmarkLZ77_WriteByte_15_16(b *testing.B) {
+	var lz77 LZ77
+	lz77.Init(LZ77Options{
 		BufferNumBits: 16,
 		WindowNumBits: 15,
 		HashNumBits:   24,
 	})
 	for n := 0; n < b.N; n++ {
-		err := hybrid.WriteByte('a')
+		err := lz77.WriteByte('a')
 		if err == ErrFull {
-			tmp := hybrid.PrepareBulkRead(1 << 16)
-			hybrid.CommitBulkRead(uint(len(tmp)))
+			tmp := lz77.PrepareBulkRead(1 << 16)
+			lz77.CommitBulkRead(uint(len(tmp)))
 		}
 	}
 }
 
-func BenchmarkHybrid_Advance_A(b *testing.B) {
-	var hybrid Hybrid
-	hybrid.Init(HybridOptions{
+func BenchmarkLZ77_Advance_A(b *testing.B) {
+	var lz77 LZ77
+	lz77.Init(LZ77Options{
 		BufferNumBits:       16,
 		WindowNumBits:       8,
 		HashNumBits:         24,
@@ -287,13 +287,13 @@ func BenchmarkHybrid_Advance_A(b *testing.B) {
 		HasMaxMatchDistance: true,
 	})
 	for n := 0; n < b.N; n++ {
-		tmp := hybrid.PrepareBulkWrite(1 << 16)
+		tmp := lz77.PrepareBulkWrite(1 << 16)
 		for index := range tmp {
 			tmp[index] = 'a'
 		}
-		hybrid.CommitBulkWrite(uint(len(tmp)))
+		lz77.CommitBulkWrite(uint(len(tmp)))
 		for {
-			buf, _, _, _ := hybrid.Advance()
+			buf, _, _, _ := lz77.Advance()
 			if buf == nil {
 				break
 			}
@@ -301,9 +301,9 @@ func BenchmarkHybrid_Advance_A(b *testing.B) {
 	}
 }
 
-func BenchmarkHybrid_Advance_B(b *testing.B) {
-	var hybrid Hybrid
-	hybrid.Init(HybridOptions{
+func BenchmarkLZ77_Advance_B(b *testing.B) {
+	var lz77 LZ77
+	lz77.Init(LZ77Options{
 		BufferNumBits:       16,
 		WindowNumBits:       15,
 		HashNumBits:         24,
@@ -315,13 +315,13 @@ func BenchmarkHybrid_Advance_B(b *testing.B) {
 		HasMaxMatchDistance: true,
 	})
 	for n := 0; n < b.N; n++ {
-		tmp := hybrid.PrepareBulkWrite(1 << 16)
+		tmp := lz77.PrepareBulkWrite(1 << 16)
 		for index := range tmp {
 			tmp[index] = 'a'
 		}
-		hybrid.CommitBulkWrite(uint(len(tmp)))
+		lz77.CommitBulkWrite(uint(len(tmp)))
 		for {
-			buf, _, _, _ := hybrid.Advance()
+			buf, _, _, _ := lz77.Advance()
 			if buf == nil {
 				break
 			}
@@ -329,9 +329,9 @@ func BenchmarkHybrid_Advance_B(b *testing.B) {
 	}
 }
 
-func BenchmarkHybrid_Advance_C(b *testing.B) {
-	var hybrid Hybrid
-	hybrid.Init(HybridOptions{
+func BenchmarkLZ77_Advance_C(b *testing.B) {
+	var lz77 LZ77
+	lz77.Init(LZ77Options{
 		BufferNumBits:       16,
 		WindowNumBits:       15,
 		HashNumBits:         24,
@@ -343,13 +343,13 @@ func BenchmarkHybrid_Advance_C(b *testing.B) {
 		HasMaxMatchDistance: true,
 	})
 	for n := 0; n < b.N; n++ {
-		tmp := hybrid.PrepareBulkWrite(1 << 16)
+		tmp := lz77.PrepareBulkWrite(1 << 16)
 		for index := range tmp {
 			tmp[index] = 'a'
 		}
-		hybrid.CommitBulkWrite(uint(len(tmp)))
+		lz77.CommitBulkWrite(uint(len(tmp)))
 		for {
-			buf, _, _, _ := hybrid.Advance()
+			buf, _, _, _ := lz77.Advance()
 			if buf == nil {
 				break
 			}
