@@ -1,4 +1,4 @@
-module github.com/chronos-tachyon/buffer/v2
+module github.com/chronos-tachyon/buffer/v3
 
 go 1.16
 
