@@ -657,7 +657,7 @@ func (lz77 *LZ77) advanceNoHash() (buf []byte, matchDistance uint, matchLength u
 		x := i
 		for x > h {
 			x--
-			if lz77.advanceCheckMatch(x, &bestFound, &bestDistance, &bestLength) {
+			if lz77.advanceCheckMatch(x, maxLen, &bestFound, &bestDistance, &bestLength) {
 				break
 			}
 		}
@@ -711,7 +711,7 @@ func (lz77 *LZ77) advanceStandard() (buf []byte, matchDistance uint, matchLength
 			for matchIndex > 0 {
 				matchIndex--
 				x := matches[matchIndex]
-				if lz77.advanceCheckMatch(x, &bestFound, &bestDistance, &bestLength) {
+				if lz77.advanceCheckMatch(x, maxLen, &bestFound, &bestDistance, &bestLength) {
 					break
 				}
 			}
@@ -737,14 +737,13 @@ func (lz77 *LZ77) advanceStandard() (buf []byte, matchDistance uint, matchLength
 	return
 }
 
-func (lz77 *LZ77) advanceCheckMatch(x uint32, bestFoundPtr *bool, bestDistancePtr *uint32, bestLengthPtr *uint32) bool {
+func (lz77 *LZ77) advanceCheckMatch(x uint32, maxLen uint32, bestFoundPtr *bool, bestDistancePtr *uint32, bestLengthPtr *uint32) bool {
 	bestFound := *bestFoundPtr
 	bestDistance := *bestDistancePtr
 	bestLength := *bestLengthPtr
 
 	slice := lz77.slice
 	minLen := lz77.minLen
-	maxLen := lz77.maxLen
 	h := lz77.h
 	i := lz77.i
 
