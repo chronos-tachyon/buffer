@@ -18,6 +18,7 @@ const hashLen = 4
 type LZ77 struct {
 	slice    []byte
 	hashMap  map[uint32]*[]uint32
+	h        uint32
 	i        uint32
 	j        uint32
 	bsize    uint32
@@ -51,6 +52,22 @@ func NewLZ77(o LZ77Options) *LZ77 {
 	return lz77
 }
 
+// Options returns a LZ77Options struct which can be used to construct a new
+// LZ77 with the same settings.
+func (lz77 LZ77) Options() LZ77Options {
+	return LZ77Options{
+		BufferNumBits:       uint(lz77.bbits),
+		WindowNumBits:       uint(lz77.wbits),
+		HashNumBits:         uint(lz77.hbits),
+		MinMatchLength:      uint(lz77.minLen),
+		MaxMatchLength:      uint(lz77.maxLen),
+		MaxMatchDistance:    uint(lz77.maxDist),
+		HasMinMatchLength:   true,
+		HasMaxMatchLength:   true,
+		HasMaxMatchDistance: true,
+	}
+}
+
 // BufferNumBits returns the size of the buffer in bits.
 func (lz77 LZ77) BufferNumBits() uint {
 	return uint(lz77.bbits)
@@ -66,14 +83,34 @@ func (lz77 LZ77) HashNumBits() uint {
 	return uint(lz77.hbits)
 }
 
+// WindowSize returns the size of the sliding window, in bytes.
+func (lz77 LZ77) WindowSize() uint {
+	return uint(lz77.wsize)
+}
+
+// WindowLen returns the number of bytes currently in the LZ77's Window.
+func (lz77 LZ77) WindowLen() uint {
+	return uint(lz77.i - lz77.h)
+}
+
+// IsWindowEmpty returns true iff the Window is empty.
+func (lz77 LZ77) IsWindowEmpty() bool {
+	return lz77.h == lz77.i
+}
+
+// IsWindowFull returns true iff the Window is full.
+func (lz77 LZ77) IsWindowFull() bool {
+	return (lz77.i - lz77.h) >= lz77.wsize
+}
+
 // BufferSize returns the size of the buffer, in bytes.
 func (lz77 LZ77) BufferSize() uint {
 	return uint(lz77.bsize)
 }
 
-// WindowSize returns the size of the sliding window, in bytes.
-func (lz77 LZ77) WindowSize() uint {
-	return uint(lz77.wsize)
+// Len returns the number of bytes currently in the LZ77's Buffer.
+func (lz77 LZ77) Len() uint {
+	return uint(lz77.j - lz77.i)
 }
 
 // IsEmpty returns true iff the buffer is empty.
@@ -84,11 +121,6 @@ func (lz77 LZ77) IsEmpty() bool {
 // IsFull returns true iff the buffer is full.
 func (lz77 LZ77) IsFull() bool {
 	return (lz77.j - lz77.i) >= lz77.bsize
-}
-
-// Len returns the number of bytes currently in the LZ77's Buffer.
-func (lz77 LZ77) Len() uint {
-	return uint(lz77.j - lz77.i)
 }
 
 // Init initializes a LZ77.
@@ -154,6 +186,7 @@ func (lz77 *LZ77) Init(o LZ77Options) {
 	*lz77 = LZ77{
 		slice:    make([]byte, wsize+bsize*2),
 		hashMap:  nil,
+		h:        wsize,
 		i:        wsize,
 		j:        wsize,
 		bsize:    bsize,
@@ -173,50 +206,47 @@ func (lz77 *LZ77) Init(o LZ77Options) {
 	}
 }
 
-// Clear clears all data, emptying the buffer and zeroing out the sliding window.
+// Clear clears all data, emptying both the buffer and the sliding window.
 func (lz77 *LZ77) Clear() {
 	wsize := lz77.wsize
+	lz77.h = wsize
 	lz77.i = wsize
 	lz77.j = wsize
-	bzero.Uint8(lz77.slice[wsize:])
-	lz77.WindowClear()
+	bzero.Uint8(lz77.slice)
+	for _, ptr := range lz77.hashMap {
+		*ptr = (*ptr)[:0]
+	}
 }
 
-// WindowClear zeroes out the sliding window.
+// WindowClear clears the sliding window.
 func (lz77 *LZ77) WindowClear() {
-	wsize := lz77.wsize
 	i := lz77.i
-	start := (i - wsize)
-
-	bzero.Uint8(lz77.slice[start:i])
+	lz77.h = i
+	bzero.Uint8(lz77.slice[:i])
 	for _, ptr := range lz77.hashMap {
-		*ptr = []uint32(nil)
+		*ptr = (*ptr)[:0]
 	}
-	lz77.windowUpdateRegion(start)
 }
 
 // SetWindow replaces the sliding window with the given data.
 func (lz77 *LZ77) SetWindow(data []byte) {
-	wsize := lz77.wsize
-
 	length := uint(len(data))
-	if length > uint(wsize) {
-		x := length - uint(wsize)
+	if maxDist := uint(lz77.maxDist); length > maxDist {
+		x := length - maxDist
 		data = data[x:]
-		length = uint(wsize)
+		length = maxDist
 	}
 
 	i := lz77.i
-	start := (i - wsize)
-	offset := (i - uint32(length))
+	h := (i - uint32(length))
 
-	slice := lz77.slice
-	bzero.Uint8(slice[start:offset])
-	copy(slice[offset:i], data)
+	lz77.h = h
+	bzero.Uint8(lz77.slice[:h])
+	copy(lz77.slice[h:i], data)
 	for _, ptr := range lz77.hashMap {
-		*ptr = []uint32(nil)
+		*ptr = (*ptr)[:0]
 	}
-	lz77.windowUpdateRegion(start)
+	lz77.windowUpdateRegion(h)
 }
 
 // DebugString returns a detailed dump of the LZ77's internal state.
@@ -226,39 +256,31 @@ func (lz77 LZ77) DebugString() string {
 
 	buf.WriteString("LZ77(\n")
 
-	bsize := lz77.bsize
-	wsize := lz77.wsize
-	minLen := lz77.minLen
-	maxLen := lz77.maxLen
-	maxDist := lz77.maxDist
-
 	slice := lz77.slice
+	h := lz77.h
 	i := lz77.i
 	j := lz77.j
 	n := uint32(len(slice))
 
-	start := (i - wsize)
-	matchStart := (i - maxDist)
 	used := (j - i)
 
 	fmt.Fprintf(buf, "\tcapacity = %d\n", n)
 	fmt.Fprintf(buf, "\tbbits = %d\n", lz77.bbits)
 	fmt.Fprintf(buf, "\twbits = %d\n", lz77.wbits)
 	fmt.Fprintf(buf, "\thbits = %d\n", lz77.hbits)
-	fmt.Fprintf(buf, "\tminLen = %d\n", minLen)
-	fmt.Fprintf(buf, "\tmaxLen = %d\n", maxLen)
-	fmt.Fprintf(buf, "\tmaxDist = %d\n", maxDist)
+	fmt.Fprintf(buf, "\tminLen = %d\n", lz77.minLen)
+	fmt.Fprintf(buf, "\tmaxLen = %d\n", lz77.maxLen)
+	fmt.Fprintf(buf, "\tmaxDist = %d\n", lz77.maxDist)
 	fmt.Fprintf(buf, "\thashMask = %#08x\n", lz77.hashMask)
-	fmt.Fprintf(buf, "\tbCap = %d\n", bsize)
-	fmt.Fprintf(buf, "\twCap = %d\n", wsize)
+	fmt.Fprintf(buf, "\tbCap = %d\n", lz77.bsize)
+	fmt.Fprintf(buf, "\twCap = %d\n", lz77.wsize)
+	fmt.Fprintf(buf, "\th = %d\n", h)
 	fmt.Fprintf(buf, "\ti = %d\n", i)
 	fmt.Fprintf(buf, "\tj = %d\n", j)
-	fmt.Fprintf(buf, "\tstart = %d\n", start)
-	fmt.Fprintf(buf, "\tmatchStart = %d\n", matchStart)
 	fmt.Fprintf(buf, "\tlength = %d\n", used)
 
 	buf.WriteString("\tbytes = [")
-	for index := matchStart; index < j; index++ {
+	for index := h; index < j; index++ {
 		prefix := ""
 		if index == i {
 			prefix = " |"
@@ -286,7 +308,7 @@ func (lz77 LZ77) DebugString() string {
 			matchesLen := uint(len(matches))
 			x := uint(0)
 			for x < matchesLen {
-				if matches[x] >= matchStart {
+				if matches[x] >= h {
 					break
 				}
 				x++
@@ -319,10 +341,9 @@ func (lz77 LZ77) GoString() string {
 	fmt.Fprintf(buf, "maxDist=%d, ", lz77.maxDist)
 	fmt.Fprintf(buf, "bsize=%d, ", lz77.bsize)
 	fmt.Fprintf(buf, "wsize=%d, ", lz77.wsize)
+	fmt.Fprintf(buf, "h=%d, ", lz77.h)
 	fmt.Fprintf(buf, "i=%d, ", lz77.i)
 	fmt.Fprintf(buf, "j=%d, ", lz77.j)
-	fmt.Fprintf(buf, "start=%d, ", lz77.i-lz77.wsize)
-	fmt.Fprintf(buf, "matchStart=%d", lz77.i-lz77.maxDist)
 	buf.WriteString(")")
 
 	return buf.String()
@@ -349,8 +370,8 @@ func (lz77 *LZ77) PrepareBulkWrite(length uint) []byte {
 
 	lz77.shift(uint32(length))
 	j = lz77.j
-	k := j + uint32(length)
-	return lz77.slice[j:k]
+	jPrime := j + uint32(length)
+	return lz77.slice[j:jPrime]
 }
 
 // CommitBulkWrite completes the bulk write begun by the previous call to
@@ -408,9 +429,9 @@ func (lz77 *LZ77) Write(data []byte) (int, error) {
 
 	lz77.shift(uint32(length))
 	j = lz77.j
-	k := j + uint32(length)
-	copy(lz77.slice[j:k], data)
-	lz77.j = k
+	jPrime := j + uint32(length)
+	copy(lz77.slice[j:jPrime], data)
+	lz77.j = jPrime
 	lz77.windowUpdateRegion(j - hashLen)
 	return int(length), err
 }
@@ -426,12 +447,12 @@ func (lz77 *LZ77) PrepareBulkRead(length uint) []byte {
 
 	i := lz77.i
 	j := lz77.j
-	k := i + uint32(length)
-	if k > j {
-		k = j
+	iPrime := i + uint32(length)
+	if iPrime > j {
+		iPrime = j
 	}
 
-	return lz77.slice[i:k]
+	return lz77.slice[i:iPrime]
 }
 
 // CommitBulkRead completes the bulk read begun by the previous call to
@@ -446,11 +467,16 @@ func (lz77 *LZ77) CommitBulkRead(length uint) {
 
 	i := lz77.i
 	j := lz77.j
-	k := i + uint32(length)
+	iPrime := i + uint32(length)
+	assert.Assertf(iPrime <= j, "length %d exceeds %d bytes of available data", length, j-i)
 
-	assert.Assertf(k <= j, "length %d exceeds %d bytes of available data", length, j-i)
+	hPrime := lz77.h
+	if x := (iPrime - lz77.maxDist); hPrime < x {
+		hPrime = x
+	}
 
-	lz77.i = k
+	lz77.h = hPrime
+	lz77.i = iPrime
 	lz77.windowUpdateRegion(i)
 }
 
@@ -458,14 +484,19 @@ func (lz77 *LZ77) CommitBulkRead(length uint) {
 func (lz77 *LZ77) ReadByte() (byte, error) {
 	i := lz77.i
 	j := lz77.j
-	k := i + 1
-
-	if k > j {
+	iPrime := i + 1
+	if iPrime > j {
 		return 0, ErrEmpty
 	}
 
+	hPrime := lz77.h
+	if x := (iPrime - lz77.maxDist); hPrime < x {
+		hPrime = x
+	}
+
 	ch := lz77.slice[i]
-	lz77.i = k
+	lz77.h = hPrime
+	lz77.i = iPrime
 	lz77.windowUpdateRegion(i)
 	return ch, nil
 }
@@ -486,18 +517,24 @@ func (lz77 *LZ77) Read(data []byte) (int, error) {
 
 	i := lz77.i
 	j := lz77.j
-	k := i + uint32(length)
-	if k > j {
-		k = j
-		length = uint(k - i)
+	iPrime := i + uint32(length)
+	if iPrime > j {
+		iPrime = j
+		length = uint(iPrime - i)
 		data = data[:length]
 		if length == 0 {
 			return 0, ErrEmpty
 		}
 	}
 
-	copy(data, lz77.slice[i:k])
-	lz77.i = k
+	hPrime := lz77.h
+	if x := (iPrime - lz77.maxDist); hPrime < x {
+		hPrime = x
+	}
+
+	lz77.h = hPrime
+	lz77.i = iPrime
+	copy(data, lz77.slice[i:iPrime])
 	lz77.windowUpdateRegion(i)
 	return int(length), nil
 }
@@ -506,16 +543,18 @@ func (lz77 *LZ77) Read(data []byte) (int, error) {
 // nature of the slice depends on the LZ77's prefix match settings, the
 // contents of the LZ77's Window, and the contents of the LZ77's Buffer.
 func (lz77 *LZ77) Advance() (buf []byte, matchDistance uint, matchLength uint, matchFound bool) {
-	i := lz77.i
-	j := lz77.j
-	n := uint32(len(lz77.slice))
-	bsize := lz77.bsize
-	wsize := lz77.wsize
+	hbits := lz77.hbits
 	minLen := lz77.minLen
 	maxLen := lz77.maxLen
 	maxDist := lz77.maxDist
-	hbits := lz77.hbits
+	bsize := lz77.bsize
+	wsize := lz77.wsize
+	h := lz77.h
+	i := lz77.i
+	j := lz77.j
+	n := uint32(len(lz77.slice))
 
+	assert.Assertf(h <= i, "h %d > i %d", h, i)
 	assert.Assertf(i <= j, "i %d > j %d", i, j)
 	assert.Assertf(j <= n, "j %d > n %d", j, n)
 
@@ -548,70 +587,79 @@ func (lz77 *LZ77) Advance() (buf []byte, matchDistance uint, matchLength uint, m
 	}
 }
 
+// WindowBytesView returns a slice into the Hybrid's Window's contents.
+func (lz77 LZ77) WindowBytesView() []byte {
+	return lz77.slice[lz77.h:lz77.i]
+}
+
+// WindowBytes allocates and returns a copy of the Hybrid's Window's contents.
+func (lz77 LZ77) WindowBytes() []byte {
+	shared := lz77.WindowBytesView()
+	result := make([]byte, len(shared))
+	copy(result, shared)
+	return shared
+}
+
+// BufferBytesView returns a slice into the Hybrid's Buffer's contents.
+func (lz77 LZ77) BufferBytesView() []byte {
+	return lz77.slice[lz77.i:lz77.j]
+}
+
+// BufferBytes allocates and returns a copy of the Hybrid's Buffer's contents.
+func (lz77 LZ77) BufferBytes() []byte {
+	shared := lz77.BufferBytesView()
+	result := make([]byte, len(shared))
+	copy(result, shared)
+	return shared
+}
+
 func (lz77 *LZ77) advanceByte() (buf []byte, matchDistance uint, matchLength uint, matchFound bool) {
 	i := lz77.i
 	j := lz77.j
-	k := i + 1
-	if k > j {
+	iPrime := i + 1
+	if iPrime > j {
 		return
 	}
 
-	buf = lz77.slice[i:k]
-	lz77.i = k
+	hPrime := lz77.h
+	if x := (iPrime - lz77.maxDist); hPrime < x {
+		hPrime = x
+	}
+
+	buf = lz77.slice[i:iPrime]
+	lz77.h = hPrime
+	lz77.i = iPrime
 	lz77.windowUpdateRegion(i)
 	return
 }
 
 func (lz77 *LZ77) advanceNoHash() (buf []byte, matchDistance uint, matchLength uint, matchFound bool) {
 	slice := lz77.slice
-	i := lz77.i
-	j := lz77.j
-	wsize := lz77.wsize
 	minLen := lz77.minLen
 	maxLen := lz77.maxLen
+	h := lz77.h
+	i := lz77.i
+	j := lz77.j
 
-	k := i + 1
-	if k > j {
+	iPrime := i + 1
+	if iPrime > j {
 		return
 	}
 
-	used := (j - i)
-	if maxLen > used {
+	if used := (j - i); maxLen > used {
 		maxLen = used
-	}
-	if maxLen < minLen {
-		buf = slice[i:k]
-		lz77.i = k
-		lz77.windowUpdateRegion(i)
-		return
 	}
 
 	var bestFound bool
 	var bestDistance, bestLength uint32
 
-	start := i - wsize
-	x := i
-	for x > start {
-		x--
-
-		if bestFound && slice[x+bestLength] != slice[i+bestLength] {
-			continue
-		}
-
-		for index := uint32(0); index < maxLen; index++ {
-			if slice[x+index] != slice[i+index] {
+	if minLen <= maxLen {
+		x := i
+		for x > h {
+			x--
+			if lz77.advanceCheckMatch(x, &bestFound, &bestDistance, &bestLength) {
 				break
 			}
-			lenSoFar := index + 1
-			if lenSoFar >= minLen && (!bestFound || lenSoFar > bestLength) {
-				bestDistance = (i - x)
-				bestLength = lenSoFar
-				bestFound = true
-			}
-		}
-
-		if bestFound && bestLength >= maxLen {
-			break
 		}
 	}
 
@@ -619,38 +667,42 @@ func (lz77 *LZ77) advanceNoHash() (buf []byte, matchDistance uint, matchLength u
 		matchFound = true
 		matchDistance = uint(bestDistance)
 		matchLength = uint(bestLength)
-		k = i + bestLength
+		iPrime = i + bestLength
 	}
 
-	buf = slice[i:k]
-	lz77.i = k
+	hPrime := h
+	if x := (iPrime - lz77.maxDist); hPrime < x {
+		hPrime = x
+	}
+
+	buf = slice[i:iPrime]
+	lz77.h = hPrime
+	lz77.i = iPrime
 	lz77.windowUpdateRegion(i)
 	return
 }
 
 func (lz77 *LZ77) advanceStandard() (buf []byte, matchDistance uint, matchLength uint, matchFound bool) {
 	slice := lz77.slice
-	i := lz77.i
-	j := lz77.j
 	minLen := lz77.minLen
 	maxLen := lz77.maxLen
-	maxDist := lz77.maxDist
+	h := lz77.h
+	i := lz77.i
+	j := lz77.j
 
-	k := i + 1
-	if k > j {
+	iPrime := i + 1
+	if iPrime > j {
 		return
 	}
 
-	used := (j - i)
-	if maxLen > used {
+	if used := (j - i); maxLen > used {
 		maxLen = used
 	}
 
 	var bestFound bool
 	var bestDistance, bestLength uint32
 
-	if maxLen >= minLen {
-		matchStart := i - maxDist
+	if minLen <= maxLen {
 		hash := hash4(slice[i:i+hashLen], lz77.hashMask)
 		ptr := lz77.hashMap[hash]
 		if ptr != nil {
@@ -658,29 +710,8 @@ func (lz77 *LZ77) advanceStandard() (buf []byte, matchDistance uint, matchLength
 			matchIndex := uint(len(matches))
 			for matchIndex > 0 {
 				matchIndex--
-
 				x := matches[matchIndex]
-				if x < matchStart {
-					break
-				}
-
-				if bestFound && slice[x+bestLength] != slice[i+bestLength] {
-					continue
-				}
-
-				for index := uint32(0); index < maxLen; index++ {
-					if slice[x+index] != slice[i+index] {
-						break
-					}
-					lenSoFar := index + 1
-					if lenSoFar >= minLen && (!bestFound || lenSoFar > bestLength) {
-						bestDistance = (i - x)
-						bestLength = lenSoFar
-						bestFound = true
-					}
-				}
-
-				if bestFound && bestLength >= maxLen {
+				if lz77.advanceCheckMatch(x, &bestFound, &bestDistance, &bestLength) {
 					break
 				}
 			}
@@ -691,13 +722,61 @@ func (lz77 *LZ77) advanceStandard() (buf []byte, matchDistance uint, matchLength
 		matchFound = true
 		matchDistance = uint(bestDistance)
 		matchLength = uint(bestLength)
-		k = i + bestLength
+		iPrime = i + bestLength
 	}
 
-	buf = slice[i:k]
-	lz77.i = uint32(k)
+	hPrime := h
+	if x := (iPrime - lz77.maxDist); hPrime < x {
+		hPrime = x
+	}
+
+	buf = slice[i:iPrime]
+	lz77.h = hPrime
+	lz77.i = iPrime
 	lz77.windowUpdateRegion(i)
 	return
+}
+
+func (lz77 *LZ77) advanceCheckMatch(x uint32, bestFoundPtr *bool, bestDistancePtr *uint32, bestLengthPtr *uint32) bool {
+	bestFound := *bestFoundPtr
+	bestDistance := *bestDistancePtr
+	bestLength := *bestLengthPtr
+
+	slice := lz77.slice
+	minLen := lz77.minLen
+	maxLen := lz77.maxLen
+	h := lz77.h
+	i := lz77.i
+
+	if x < h {
+		return true
+	}
+
+	if bestFound && slice[x+bestLength] != slice[i+bestLength] {
+		return false
+	}
+
+	for index := uint32(0); index < maxLen; index++ {
+		if slice[x+index] != slice[i+index] {
+			break
+		}
+		lenSoFar := index + 1
+		if lenSoFar >= minLen && (!bestFound || lenSoFar > bestLength) {
+			bestDistance = (i - x)
+			bestLength = lenSoFar
+			bestFound = true
+		}
+	}
+
+	*bestFoundPtr = bestFound
+	*bestDistancePtr = bestDistance
+	*bestLengthPtr = bestLength
+
+	if bestFound && bestLength >= maxLen {
+		return true
+	}
+
+	return false
 }
 
 func (lz77 *LZ77) windowUpdateRegion(index uint32) {
@@ -706,12 +785,12 @@ func (lz77 *LZ77) windowUpdateRegion(index uint32) {
 	}
 
 	slice := lz77.slice
+	h := lz77.h
 	i := lz77.i
 	j := lz77.j
 
-	matchStart := i - lz77.maxDist
-	if index < matchStart {
-		index = matchStart
+	if index < h {
+		index = h
 	}
 
 	end := j - hashLen
@@ -731,7 +810,7 @@ func (lz77 *LZ77) windowUpdateRegion(index uint32) {
 
 		x := uint(0)
 		for x < matchesLen {
-			if matches[x] >= matchStart {
+			if matches[x] >= h {
 				break
 			}
 			x++
@@ -769,6 +848,7 @@ func (lz77 *LZ77) windowUpdateRegion(index uint32) {
 func (lz77 *LZ77) shift(n uint32) {
 	wsize := lz77.wsize
 	slice := lz77.slice
+	h := lz77.h
 	i := lz77.i
 	j := lz77.j
 	k := j + n
@@ -776,12 +856,20 @@ func (lz77 *LZ77) shift(n uint32) {
 		return
 	}
 
-	start := (i - wsize)
-	x := (j - start)
-	copy(slice[0:x], slice[start:j])
-	bzero.Uint8(slice[x:])
-	lz77.i = wsize
-	lz77.j = x
+	windowLen := (i - h)
+	bufferLen := (j - i)
+
+	iPrime := wsize
+	hPrime := (iPrime - windowLen)
+	jPrime := (iPrime + bufferLen)
+
+	copy(slice[hPrime:jPrime], slice[h:j])
+	bzero.Uint8(slice[:hPrime])
+	bzero.Uint8(slice[jPrime:])
+
+	lz77.h = hPrime
+	lz77.i = iPrime
+	lz77.j = jPrime
 
 	for _, ptr := range lz77.hashMap {
 		matches := *ptr
@@ -790,28 +878,12 @@ func (lz77 *LZ77) shift(n uint32) {
 		for a < matchesLen {
 			index := matches[a]
 			a++
-			if index >= start {
-				matches[b] = index - start
+			if index >= h {
+				matches[b] = index - h + hPrime
 				b++
 			}
 		}
 		*ptr = matches[:b]
-	}
-}
-
-// Options returns a LZ77Options struct which can be used to construct a new
-// LZ77 with the same settings.
-func (lz77 LZ77) Options() LZ77Options {
-	return LZ77Options{
-		BufferNumBits:       uint(lz77.bbits),
-		WindowNumBits:       uint(lz77.wbits),
-		HashNumBits:         uint(lz77.hbits),
-		MinMatchLength:      uint(lz77.minLen),
-		MaxMatchLength:      uint(lz77.maxLen),
-		MaxMatchDistance:    uint(lz77.maxDist),
-		HasMinMatchLength:   true,
-		HasMaxMatchLength:   true,
-		HasMaxMatchDistance: true,
 	}
 }
 
@@ -824,6 +896,12 @@ func (opts LZ77Options) Equal(other LZ77Options) bool {
 	ok = ok && (opts.HasMinMatchLength == other.HasMinMatchLength)
 	ok = ok && (opts.HasMaxMatchLength == other.HasMaxMatchLength)
 	ok = ok && (opts.HasMaxMatchDistance == other.HasMaxMatchDistance)
+	ok = ok && opts.equalPartTwo(other)
+	return ok
+}
+
+func (opts LZ77Options) equalPartTwo(other LZ77Options) bool {
+	ok := true
 	if opts.HasMinMatchLength && other.HasMinMatchLength {
 		ok = ok && (opts.MinMatchLength == other.MinMatchLength)
 	}

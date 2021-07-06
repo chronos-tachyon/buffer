@@ -5,6 +5,7 @@ import (
 	"testing"
 )
 
+//nolint:gocyclo
 func TestLZ77(t *testing.T) {
 	var lz77 LZ77
 	lz77.Init(LZ77Options{
@@ -37,10 +38,9 @@ func TestLZ77(t *testing.T) {
 		"\thashMask = 0x000000ff\n",
 		"\tbCap = 16\n",
 		"\twCap = 8\n",
+		"\th = 0\n",
 		"\ti = 8\n",
 		"\tj = 24\n",
-		"\tstart = 0\n",
-		"\tmatchStart = 0\n",
 		"\tlength = 16\n",
 		"\tbytes = [ 63 64 65 66 30 31 32 33 | 30 31 32 33 34 35 36 37 38 39 61 62 63 64 65 66 ]\n",
 		"\thashList = [ 0x003d:[7] 0x0055:[2] 0x0071:[0] 0x0087:[6] 0x00bd:[5] 0x00c4:[3] 0x00d1:[4] 0x00e0:[1] ]\n",
@@ -73,10 +73,9 @@ func TestLZ77(t *testing.T) {
 		"\thashMask = 0x000000ff\n",
 		"\tbCap = 16\n",
 		"\twCap = 8\n",
+		"\th = 4\n",
 		"\ti = 12\n",
 		"\tj = 24\n",
-		"\tstart = 4\n",
-		"\tmatchStart = 4\n",
 		"\tlength = 12\n",
 		"\tbytes = [ 30 31 32 33 30 31 32 33 | 34 35 36 37 38 39 61 62 63 64 65 66 ]\n",
 		"\thashList = [ 0x0005:[10] 0x003d:[7] 0x0087:[6] 0x009a:[11] 0x009d:[9] 0x00bd:[5] 0x00d1:[4 8] ]\n",
@@ -108,13 +107,12 @@ func TestLZ77(t *testing.T) {
 		"\thashMask = 0x000000ff\n",
 		"\tbCap = 16\n",
 		"\twCap = 8\n",
+		"\th = 8\n",
 		"\ti = 8\n",
 		"\tj = 24\n",
-		"\tstart = 0\n",
-		"\tmatchStart = 0\n",
 		"\tlength = 16\n",
-		"\tbytes = [ 00 00 00 00 00 00 00 00 | 30 31 32 33 30 31 32 33 30 31 32 33 30 31 32 33 ]\n",
-		"\thashList = [ 0x0037:[7] 0x00d0:[0 1 2 3 4] 0x00d8:[6] 0x00fb:[5] ]\n",
+		"\tbytes = [ | 30 31 32 33 30 31 32 33 30 31 32 33 30 31 32 33 ]\n",
+		"\thashList = [ ]\n",
 		")\n",
 	}, "")
 	actualDebug = lz77.DebugString()
@@ -174,13 +172,12 @@ func TestLZ77(t *testing.T) {
 		"\thashMask = 0x000000ff\n",
 		"\tbCap = 16\n",
 		"\twCap = 8\n",
+		"\th = 8\n",
 		"\ti = 12\n",
 		"\tj = 24\n",
-		"\tstart = 4\n",
-		"\tmatchStart = 4\n",
 		"\tlength = 12\n",
-		"\tbytes = [ 00 00 00 00 30 31 32 33 | 30 31 32 33 30 31 32 33 30 31 32 33 ]\n",
-		"\thashList = [ 0x0037:[7] 0x003d:[11] 0x0087:[10] 0x00bd:[9] 0x00d0:[4] 0x00d1:[8] 0x00d8:[6] 0x00fb:[5] ]\n",
+		"\tbytes = [ 30 31 32 33 | 30 31 32 33 30 31 32 33 30 31 32 33 ]\n",
+		"\thashList = [ 0x003d:[11] 0x0087:[10] 0x00bd:[9] 0x00d1:[8] ]\n",
 		")\n",
 	}, "")
 	actualDebug = lz77.DebugString()
@@ -210,10 +207,9 @@ func TestLZ77(t *testing.T) {
 		"\thashMask = 0x000000ff\n",
 		"\tbCap = 16\n",
 		"\twCap = 8\n",
+		"\th = 12\n",
 		"\ti = 20\n",
 		"\tj = 24\n",
-		"\tstart = 12\n",
-		"\tmatchStart = 12\n",
 		"\tlength = 4\n",
 		"\tbytes = [ 30 31 32 33 30 31 32 33 | 30 31 32 33 ]\n",
 		"\thashList = [ 0x003d:[15 19] 0x0087:[14 18] 0x00bd:[13 17] 0x00d1:[12 16] ]\n",
