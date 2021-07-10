@@ -43,7 +43,7 @@ func TestLZ77(t *testing.T) {
 		"\tj = 24\n",
 		"\tlength = 16\n",
 		"\tbytes = [ 63 64 65 66 30 31 32 33 | 30 31 32 33 34 35 36 37 38 39 61 62 63 64 65 66 ]\n",
-		"\thashList = [ 0x003d:[7] 0x0055:[2] 0x0071:[0] 0x0087:[6] 0x00bd:[5] 0x00c4:[3] 0x00d1:[4] 0x00e0:[1] ]\n",
+		"\thashtable = [ 0x4e:[7 3] 0x64:[0] 0x7f:[6] 0xdb:[1] 0xe1:[5 2] 0xf0:[4] ]\n",
 		")\n",
 	}, "")
 	actualDebug := lz77.DebugString()
@@ -78,7 +78,7 @@ func TestLZ77(t *testing.T) {
 		"\tj = 24\n",
 		"\tlength = 12\n",
 		"\tbytes = [ 30 31 32 33 30 31 32 33 | 34 35 36 37 38 39 61 62 63 64 65 66 ]\n",
-		"\thashList = [ 0x0005:[10] 0x003d:[7] 0x0087:[6] 0x009a:[11] 0x009d:[9] 0x00bd:[5] 0x00d1:[4 8] ]\n",
+		"\thashtable = [ 0x3d:[9] 0x4e:[7] 0x6a:[10] 0x7f:[6] 0xa3:[11] 0xe1:[5] 0xf0:[8 4] ]\n",
 		")\n",
 	}, "")
 	actualDebug = lz77.DebugString()
@@ -112,7 +112,7 @@ func TestLZ77(t *testing.T) {
 		"\tj = 24\n",
 		"\tlength = 16\n",
 		"\tbytes = [ | 30 31 32 33 30 31 32 33 30 31 32 33 30 31 32 33 ]\n",
-		"\thashList = [ ]\n",
+		"\thashtable = [ ]\n",
 		")\n",
 	}, "")
 	actualDebug = lz77.DebugString()
@@ -177,7 +177,7 @@ func TestLZ77(t *testing.T) {
 		"\tj = 24\n",
 		"\tlength = 12\n",
 		"\tbytes = [ 30 31 32 33 | 30 31 32 33 30 31 32 33 30 31 32 33 ]\n",
-		"\thashList = [ 0x003d:[11] 0x0087:[10] 0x00bd:[9] 0x00d1:[8] ]\n",
+		"\thashtable = [ 0x4e:[11] 0x7f:[10] 0xe1:[9] 0xf0:[8] ]\n",
 		")\n",
 	}, "")
 	actualDebug = lz77.DebugString()
@@ -212,7 +212,7 @@ func TestLZ77(t *testing.T) {
 		"\tj = 24\n",
 		"\tlength = 4\n",
 		"\tbytes = [ 30 31 32 33 30 31 32 33 | 30 31 32 33 ]\n",
-		"\thashList = [ 0x003d:[15 19] 0x0087:[14 18] 0x00bd:[13 17] 0x00d1:[12 16] ]\n",
+		"\thashtable = [ 0x4e:[19 15] 0x7f:[18 14] 0xe1:[17 13] 0xf0:[16 12] ]\n",
 		")\n",
 	}, "")
 	actualDebug = lz77.DebugString()

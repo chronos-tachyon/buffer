@@ -189,6 +189,28 @@ func (window Window) LookupByte(distance uint) (byte, error) {
 	return window.slice[k], nil
 }
 
+// LookupSlice returns a slice which was written previously.  The distance
+// argument measures the offset into the Window, with 1 representing the most
+// recently written byte and Window.Size() representing the oldest byte still
+// within the Window.  The length argument is the maximum length of the slice
+// to be returned; it may be shorter if it would otherwise extend past the most
+// recently written byte.
+func (window Window) LookupSlice(distance uint, length uint) ([]byte, error) {
+	size := window.size
+	if distance == 0 || distance > uint(size) {
+		return nil, ErrBadDistance
+	}
+
+	if length > distance {
+		length = distance
+	}
+
+	j := window.end
+	k := j - uint32(distance)
+	l := k + uint32(length)
+	return window.slice[k:l], nil
+}
+
 // DebugString returns a detailed dump of the Window's internal state.
 func (window Window) DebugString() string {
 	buf := takeStringsBuilder()

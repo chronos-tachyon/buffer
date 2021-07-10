@@ -3,33 +3,34 @@ package buffer
 import (
 	"fmt"
 	"math/bits"
-	"sort"
 
 	"github.com/chronos-tachyon/assert"
 	"github.com/chronos-tachyon/bzero"
 )
 
 const hashLen = 4
+const hashLenSubOne = hashLen - 1
 
 // LZ77 implements a combination Window/Buffer that uses the Window to
 // remember bytes that were recently removed from the Buffer, and that hashes
 // all data that enters the Window so that LZ77-style prefix matching can be
 // made efficient.
 type LZ77 struct {
-	slice    []byte
-	hashMap  map[uint32]*[]uint32
-	h        uint32
-	i        uint32
-	j        uint32
-	bsize    uint32
-	wsize    uint32
-	hashMask uint32
-	minLen   uint32
-	maxLen   uint32
-	maxDist  uint32
-	bbits    byte
-	wbits    byte
-	hbits    byte
+	slice         []byte
+	htLastByHash  []uint32
+	htPrevByIndex []uint32
+	h             uint32
+	i             uint32
+	j             uint32
+	bsize         uint32
+	wsize         uint32
+	hashMask      uint32
+	minLen        uint32
+	maxLen        uint32
+	maxDist       uint32
+	bbits         byte
+	wbits         byte
+	hbits         byte
 }
 
 // LZ77Options holds options for initializing an instance of LZ77.
@@ -185,7 +186,6 @@ func (lz77 *LZ77) Init(o LZ77Options) {
 
 	*lz77 = LZ77{
 		slice:    make([]byte, wsize+bsize*2),
-		hashMap:  nil,
 		h:        wsize,
 		i:        wsize,
 		j:        wsize,
@@ -201,8 +201,8 @@ func (lz77 *LZ77) Init(o LZ77Options) {
 	}
 
 	if hbits != 0 {
-		lz77.hashMap = make(map[uint32]*[]uint32, maxDist)
-		lz77.windowUpdateRegion(0)
+		lz77.htLastByHash = make([]uint32, uint(1)<<hbits)
+		lz77.htPrevByIndex = make([]uint32, uint(len(lz77.slice)))
 	}
 }
 
@@ -213,9 +213,8 @@ func (lz77 *LZ77) Clear() {
 	lz77.i = wsize
 	lz77.j = wsize
 	bzero.Uint8(lz77.slice)
-	for _, ptr := range lz77.hashMap {
-		*ptr = (*ptr)[:0]
-	}
+	bzero.Uint32(lz77.htLastByHash)
+	bzero.Uint32(lz77.htPrevByIndex)
 }
 
 // WindowClear clears the sliding window.
@@ -223,9 +222,8 @@ func (lz77 *LZ77) WindowClear() {
 	i := lz77.i
 	lz77.h = i
 	bzero.Uint8(lz77.slice[:i])
-	for _, ptr := range lz77.hashMap {
-		*ptr = (*ptr)[:0]
-	}
+	bzero.Uint32(lz77.htLastByHash)
+	bzero.Uint32(lz77.htPrevByIndex)
 }
 
 // SetWindow replaces the sliding window with the given data.
@@ -243,9 +241,8 @@ func (lz77 *LZ77) SetWindow(data []byte) {
 	lz77.h = h
 	bzero.Uint8(lz77.slice[:h])
 	copy(lz77.slice[h:i], data)
-	for _, ptr := range lz77.hashMap {
-		*ptr = (*ptr)[:0]
-	}
+	bzero.Uint32(lz77.htLastByHash)
+	bzero.Uint32(lz77.htPrevByIndex)
 	lz77.windowUpdateRegion(h)
 }
 
@@ -293,30 +290,22 @@ func (lz77 LZ77) DebugString() string {
 	}
 	buf.WriteString(" ]\n")
 
-	if lz77.hashMap != nil {
-		buf.WriteString("\thashList = [")
+	if lz77.htLastByHash != nil {
+		buf.WriteString("\thashtable = [")
 
-		hashes := make([]uint32, 0, len(lz77.hashMap))
-		for hash := range lz77.hashMap {
-			hashes = append(hashes, hash)
-		}
-		sort.Sort(byUint32(hashes))
-
-		for _, hash := range hashes {
-			ptr := lz77.hashMap[hash]
-			matches := *ptr
-			matchesLen := uint(len(matches))
-			x := uint(0)
-			for x < matchesLen {
-				if matches[x] >= h {
-					break
+		for index, lastPlusOne := range lz77.htLastByHash {
+			if lastPlusOne > h && lastPlusOne <= i {
+				hash := uint32(index)
+				last := lastPlusOne - 1
+				fmt.Fprintf(buf, " %#02x:[%d", hash, last)
+				prevPlusOne := lz77.htPrevByIndex[last]
+				for prevPlusOne > h && prevPlusOne < lastPlusOne {
+					prev := prevPlusOne - 1
+					fmt.Fprintf(buf, " %d", prev)
+					lastPlusOne = prevPlusOne
+					prevPlusOne = lz77.htPrevByIndex[prev]
 				}
-				x++
-			}
-			matches = matches[x:]
-			matchesLen -= x
-			if matchesLen > 0 {
-				fmt.Fprintf(buf, " %#04x:%v", hash, matches)
+				buf.WriteString("]")
 			}
 		}
 
@@ -343,7 +332,7 @@ func (lz77 LZ77) GoString() string {
 	fmt.Fprintf(buf, "wsize=%d, ", lz77.wsize)
 	fmt.Fprintf(buf, "h=%d, ", lz77.h)
 	fmt.Fprintf(buf, "i=%d, ", lz77.i)
-	fmt.Fprintf(buf, "j=%d, ", lz77.j)
+	fmt.Fprintf(buf, "j=%d", lz77.j)
 	buf.WriteString(")")
 
 	return buf.String()
@@ -388,7 +377,7 @@ func (lz77 *LZ77) CommitBulkWrite(length uint) {
 	assert.Assertf(length <= uint(y), "length %d > available space %d", length, uint(y))
 
 	lz77.j = j + uint32(length)
-	lz77.windowUpdateRegion(j - hashLen)
+	lz77.windowUpdateRegion(j - hashLenSubOne)
 }
 
 // WriteByte writes a single byte to the LZ77's Buffer.
@@ -407,7 +396,7 @@ func (lz77 *LZ77) WriteByte(ch byte) error {
 	j = lz77.j
 	lz77.slice[j] = ch
 	lz77.j = j + 1
-	lz77.windowUpdateRegion(j - hashLen)
+	lz77.windowUpdateRegion(j - hashLenSubOne)
 	return nil
 }
 
@@ -432,7 +421,7 @@ func (lz77 *LZ77) Write(data []byte) (int, error) {
 	jPrime := j + uint32(length)
 	copy(lz77.slice[j:jPrime], data)
 	lz77.j = jPrime
-	lz77.windowUpdateRegion(j - hashLen)
+	lz77.windowUpdateRegion(j - hashLenSubOne)
 	return int(length), err
 }
 
@@ -471,8 +460,8 @@ func (lz77 *LZ77) CommitBulkRead(length uint) {
 	assert.Assertf(iPrime <= j, "length %d exceeds %d bytes of available data", length, j-i)
 
 	hPrime := lz77.h
-	if x := (iPrime - lz77.maxDist); hPrime < x {
-		hPrime = x
+	if hMin := (iPrime - lz77.maxDist); hPrime < hMin {
+		hPrime = hMin
 	}
 
 	lz77.h = hPrime
@@ -490,8 +479,8 @@ func (lz77 *LZ77) ReadByte() (byte, error) {
 	}
 
 	hPrime := lz77.h
-	if x := (iPrime - lz77.maxDist); hPrime < x {
-		hPrime = x
+	if hMin := (iPrime - lz77.maxDist); hPrime < hMin {
+		hPrime = hMin
 	}
 
 	ch := lz77.slice[i]
@@ -528,8 +517,8 @@ func (lz77 *LZ77) Read(data []byte) (int, error) {
 	}
 
 	hPrime := lz77.h
-	if x := (iPrime - lz77.maxDist); hPrime < x {
-		hPrime = x
+	if hMin := (iPrime - lz77.maxDist); hPrime < hMin {
+		hPrime = hMin
 	}
 
 	lz77.h = hPrime
@@ -571,10 +560,12 @@ func (lz77 *LZ77) Advance() (buf []byte, matchDistance uint, matchLength uint, m
 	}
 
 	if hbits == 0 {
-		assert.Assert(lz77.hashMap == nil, "hashMap is unexpectedly non-nil")
+		assert.Assert(lz77.htLastByHash == nil, "htLastByHash is unexpectedly non-nil")
+		assert.Assert(lz77.htPrevByIndex == nil, "htPrevByIndex is unexpectedly non-nil")
 	} else {
 		assert.Assertf(minLen >= hashLen, "minLen %d > hashLen %d", minLen, hashLen)
-		assert.NotNil(&lz77.hashMap)
+		assert.NotNil(&lz77.htLastByHash)
+		assert.NotNil(&lz77.htPrevByIndex)
 	}
 
 	switch {
@@ -622,8 +613,8 @@ func (lz77 *LZ77) advanceByte() (buf []byte, matchDistance uint, matchLength uin
 	}
 
 	hPrime := lz77.h
-	if x := (iPrime - lz77.maxDist); hPrime < x {
-		hPrime = x
+	if hMin := (iPrime - lz77.maxDist); hPrime < hMin {
+		hPrime = hMin
 	}
 
 	buf = lz77.slice[i:iPrime]
@@ -654,10 +645,10 @@ func (lz77 *LZ77) advanceNoHash() (buf []byte, matchDistance uint, matchLength u
 	var bestDistance, bestLength uint32
 
 	if minLen <= maxLen {
-		x := i
-		for x > h {
-			x--
-			if lz77.advanceCheckMatch(x, maxLen, &bestFound, &bestDistance, &bestLength) {
+		curr := i
+		for curr > h {
+			curr--
+			if lz77.advanceCheckMatch(curr, maxLen, &bestFound, &bestDistance, &bestLength) {
 				break
 			}
 		}
@@ -671,8 +662,8 @@ func (lz77 *LZ77) advanceNoHash() (buf []byte, matchDistance uint, matchLength u
 	}
 
 	hPrime := h
-	if x := (iPrime - lz77.maxDist); hPrime < x {
-		hPrime = x
+	if hMin := (iPrime - lz77.maxDist); hPrime < hMin {
+		hPrime = hMin
 	}
 
 	buf = slice[i:iPrime]
@@ -704,17 +695,15 @@ func (lz77 *LZ77) advanceStandard() (buf []byte, matchDistance uint, matchLength
 
 	if minLen <= maxLen {
 		hash := hash4(slice[i:i+hashLen], lz77.hashMask)
-		ptr := lz77.hashMap[hash]
-		if ptr != nil {
-			matches := *ptr
-			matchIndex := uint(len(matches))
-			for matchIndex > 0 {
-				matchIndex--
-				x := matches[matchIndex]
-				if lz77.advanceCheckMatch(x, maxLen, &bestFound, &bestDistance, &bestLength) {
-					break
-				}
+		lastPlusOne := i + 1
+		currPlusOne := lz77.htLastByHash[hash]
+		for currPlusOne > h && currPlusOne < lastPlusOne {
+			curr := currPlusOne - 1
+			if lz77.advanceCheckMatch(curr, maxLen, &bestFound, &bestDistance, &bestLength) {
+				break
 			}
+			lastPlusOne = currPlusOne
+			currPlusOne = lz77.htPrevByIndex[curr]
 		}
 	}
 
@@ -726,8 +715,8 @@ func (lz77 *LZ77) advanceStandard() (buf []byte, matchDistance uint, matchLength
 	}
 
 	hPrime := h
-	if x := (iPrime - lz77.maxDist); hPrime < x {
-		hPrime = x
+	if hMin := (iPrime - lz77.maxDist); hPrime < hMin {
+		hPrime = hMin
 	}
 
 	buf = slice[i:iPrime]
@@ -737,31 +726,23 @@ func (lz77 *LZ77) advanceStandard() (buf []byte, matchDistance uint, matchLength
 	return
 }
 
-func (lz77 *LZ77) advanceCheckMatch(x uint32, maxLen uint32, bestFoundPtr *bool, bestDistancePtr *uint32, bestLengthPtr *uint32) bool {
+func (lz77 *LZ77) advanceCheckMatch(curr uint32, maxLen uint32, bestFoundPtr *bool, bestDistancePtr *uint32, bestLengthPtr *uint32) bool {
 	bestFound := *bestFoundPtr
 	bestDistance := *bestDistancePtr
 	bestLength := *bestLengthPtr
 
 	slice := lz77.slice
 	minLen := lz77.minLen
-	h := lz77.h
 	i := lz77.i
 
-	if x < h {
-		return true
-	}
-
-	if bestFound && slice[x+bestLength] != slice[i+bestLength] {
+	if bestFound && slice[curr+bestLength] != slice[i+bestLength] {
 		return false
 	}
 
-	for index := uint32(0); index < maxLen; index++ {
-		if slice[x+index] != slice[i+index] {
-			break
-		}
+	for index := uint32(0); index < maxLen && slice[curr+index] == slice[i+index]; index++ {
 		lenSoFar := index + 1
 		if lenSoFar >= minLen && (!bestFound || lenSoFar > bestLength) {
-			bestDistance = (i - x)
+			bestDistance = (i - curr)
 			bestLength = lenSoFar
 			bestFound = true
 		}
@@ -771,15 +752,11 @@ func (lz77 *LZ77) advanceCheckMatch(x uint32, maxLen uint32, bestFoundPtr *bool,
 	*bestDistancePtr = bestDistance
 	*bestLengthPtr = bestLength
 
-	if bestFound && bestLength >= maxLen {
-		return true
-	}
-
-	return false
+	return (bestFound && bestLength >= maxLen)
 }
 
 func (lz77 *LZ77) windowUpdateRegion(index uint32) {
-	if lz77.hashMap == nil {
+	if lz77.htLastByHash == nil {
 		return
 	}
 
@@ -792,54 +769,17 @@ func (lz77 *LZ77) windowUpdateRegion(index uint32) {
 		index = h
 	}
 
-	end := j - hashLen
+	end := j - hashLenSubOne
 	if end > i {
 		end = i
 	}
 
 	for index < end {
 		hash := hash4(slice[index:index+hashLen], lz77.hashMask)
-
-		var matches []uint32
-		ptr := lz77.hashMap[hash]
-		if ptr != nil {
-			matches = *ptr
-		}
-		matchesLen := uint(len(matches))
-
-		x := uint(0)
-		for x < matchesLen {
-			if matches[x] >= h {
-				break
-			}
-			x++
-		}
-		matches = matches[x:]
-		matchesLen -= x
-
-		doAppend := true
-		if matchesLen != 0 {
-			y := matchesLen - 1
-			if matches[y] >= index {
-				doAppend = false
-			}
-		}
-
-		if doAppend {
-			if matches == nil {
-				matches = make([]uint32, 0, 256)
-			}
-			matches = append(matches, uint32(index))
-		}
-
-		if ptr == nil {
-			ptr = new([]uint32)
-			*ptr = matches
-			lz77.hashMap[hash] = ptr
-		} else {
-			*ptr = matches
-		}
-
+		prevPlusOne := lz77.htLastByHash[hash]
+		indexPlusOne := index + 1
+		lz77.htLastByHash[hash] = indexPlusOne
+		lz77.htPrevByIndex[index] = prevPlusOne
 		index++
 	}
 }
@@ -870,20 +810,29 @@ func (lz77 *LZ77) shift(n uint32) {
 	lz77.i = iPrime
 	lz77.j = jPrime
 
-	for _, ptr := range lz77.hashMap {
-		matches := *ptr
-		matchesLen := uint(len(matches))
-		var a, b uint
-		for a < matchesLen {
-			index := matches[a]
-			a++
-			if index >= h {
-				matches[b] = index - h + hPrime
-				b++
-			}
-		}
-		*ptr = matches[:b]
+	if lz77.htLastByHash == nil {
+		return
 	}
+
+	delta := h - hPrime
+	for hash, lastPlusOne := range lz77.htLastByHash {
+		if lastPlusOne > h && lastPlusOne <= i {
+			lz77.htLastByHash[hash] = (lastPlusOne - delta)
+		} else {
+			lz77.htLastByHash[hash] = 0
+		}
+	}
+
+	bzero.Uint32(lz77.htPrevByIndex[0:hPrime])
+	for index := hPrime; index < iPrime; index++ {
+		prevPlusOne := lz77.htPrevByIndex[index]
+		if prevPlusOne > h && prevPlusOne <= i {
+			lz77.htPrevByIndex[index] = prevPlusOne - delta
+		} else {
+			lz77.htPrevByIndex[index] = 0
+		}
+	}
+	bzero.Uint32(lz77.htPrevByIndex[iPrime:])
 }
 
 // Equal returns true iff the given LZ77Options is semantically equal to this one.
@@ -915,60 +864,18 @@ func (opts LZ77Options) equalPartTwo(other LZ77Options) bool {
 
 // hash4 returns a hash of the first 4 bytes of slice.
 //
-// It is based on CityHash32.  Reference:
+// It is *very* loosely inspired by Murmur3-32 and CityHash32.  Reference:
 //
+//    https://github.com/spaolacci/murmur3/blob/master/murmur32.go
 //    https://github.com/google/cityhash/blob/master/src/city.cc
 //
 func hash4(slice []byte, hashMask uint32) uint32 {
 	const c1 = 0xcc9e2d51
-	var b, c uint32
-	b = uint32(slice[0])
-	c = uint32(9) ^ b
-	b = uint32(int32(b*c1) + int32(int8(slice[1])))
-	c ^= b
-	b = uint32(int32(b*c1) + int32(int8(slice[2])))
-	c ^= b
-	b = uint32(int32(b*c1) + int32(int8(slice[3])))
-	c ^= b
-	return fmix(mur(b, mur(4, c))) & hashMask
-}
-
-func mur(a, h uint32) uint32 {
-	const c1 = 0xcc9e2d51
 	const c2 = 0x1b873593
-	a *= c1
-	a = rotate32(a, 17)
-	a *= c2
-	h ^= a
-	h = rotate32(h, 19)
-	return h*5 + c2
+	u32 := (uint32(slice[0]) << 24) | (uint32(slice[1]) << 16) | (uint32(slice[2]) << 8) | uint32(slice[3])
+	return (rotate32(u32*c1, 17) ^ rotate32(u32*c2, 19)) & hashMask
 }
 
 func rotate32(x uint32, shift int) uint32 {
-	return bits.RotateLeft32(x, -shift)
+	return bits.RotateLeft32(x, shift)
 }
-
-func fmix(h uint32) uint32 {
-	h ^= (h >> 16)
-	h *= 0x85ebca6b
-	h ^= (h >> 13)
-	h *= 0xc2b2ae35
-	h ^= (h >> 16)
-	return h
-}
-
-type byUint32 []uint32
-
-func (list byUint32) Len() int {
-	return len(list)
-}
-
-func (list byUint32) Swap(i, j int) {
-	list[i], list[j] = list[j], list[i]
-}
-
-func (list byUint32) Less(i, j int) bool {
-	return list[i] < list[j]
-}
-
-var _ sort.Interface = byUint32(nil)
