@@ -6,6 +6,7 @@ import (
 	"io"
 
 	"github.com/chronos-tachyon/assert"
+	"github.com/chronos-tachyon/bufferpool"
 	"github.com/chronos-tachyon/bzero"
 )
 
@@ -213,8 +214,8 @@ func (window Window) LookupSlice(distance uint, length uint) ([]byte, error) {
 
 // DebugString returns a detailed dump of the Window's internal state.
 func (window Window) DebugString() string {
-	buf := takeStringsBuilder()
-	defer giveStringsBuilder(buf)
+	bb := bufferpool.Get()
+	defer bufferpool.Put(bb)
 
 	nbits := window.nbits
 	size := window.size
@@ -222,19 +223,19 @@ func (window Window) DebugString() string {
 	i := j - size
 	slice := window.slice
 
-	buf.WriteString("Window(")
-	fmt.Fprintf(buf, "nbits=%d, ", nbits)
-	fmt.Fprintf(buf, "size=%d, ", size)
-	fmt.Fprintf(buf, "i=%d, ", i)
-	fmt.Fprintf(buf, "j=%d, ", j)
-	buf.WriteString("[")
+	bb.WriteString("Window(")
+	fmt.Fprintf(bb, "nbits=%d, ", nbits)
+	fmt.Fprintf(bb, "size=%d, ", size)
+	fmt.Fprintf(bb, "i=%d, ", i)
+	fmt.Fprintf(bb, "j=%d, ", j)
+	bb.WriteString("[")
 	for i < j {
 		ch := slice[i]
 		i++
-		fmt.Fprintf(buf, " %02x", ch)
+		fmt.Fprintf(bb, " %02x", ch)
 	}
-	buf.WriteString(" ])")
-	return buf.String()
+	bb.WriteString(" ])")
+	return bb.String()
 }
 
 // GoString returns a brief dump of the Window's internal state.

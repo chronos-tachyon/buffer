@@ -5,6 +5,7 @@ import (
 	"math/bits"
 
 	"github.com/chronos-tachyon/assert"
+	"github.com/chronos-tachyon/bufferpool"
 	"github.com/chronos-tachyon/bzero"
 )
 
@@ -248,10 +249,10 @@ func (lz77 *LZ77) SetWindow(data []byte) {
 
 // DebugString returns a detailed dump of the LZ77's internal state.
 func (lz77 LZ77) DebugString() string {
-	buf := takeStringsBuilder()
-	defer giveStringsBuilder(buf)
+	bb := bufferpool.Get()
+	defer bufferpool.Put(bb)
 
-	buf.WriteString("LZ77(\n")
+	bb.WriteString("LZ77(\n")
 
 	slice := lz77.slice
 	h := lz77.h
@@ -261,81 +262,81 @@ func (lz77 LZ77) DebugString() string {
 
 	used := (j - i)
 
-	fmt.Fprintf(buf, "\tcapacity = %d\n", n)
-	fmt.Fprintf(buf, "\tbbits = %d\n", lz77.bbits)
-	fmt.Fprintf(buf, "\twbits = %d\n", lz77.wbits)
-	fmt.Fprintf(buf, "\thbits = %d\n", lz77.hbits)
-	fmt.Fprintf(buf, "\tminLen = %d\n", lz77.minLen)
-	fmt.Fprintf(buf, "\tmaxLen = %d\n", lz77.maxLen)
-	fmt.Fprintf(buf, "\tmaxDist = %d\n", lz77.maxDist)
-	fmt.Fprintf(buf, "\thashMask = %#08x\n", lz77.hashMask)
-	fmt.Fprintf(buf, "\tbCap = %d\n", lz77.bsize)
-	fmt.Fprintf(buf, "\twCap = %d\n", lz77.wsize)
-	fmt.Fprintf(buf, "\th = %d\n", h)
-	fmt.Fprintf(buf, "\ti = %d\n", i)
-	fmt.Fprintf(buf, "\tj = %d\n", j)
-	fmt.Fprintf(buf, "\tlength = %d\n", used)
+	fmt.Fprintf(bb, "\tcapacity = %d\n", n)
+	fmt.Fprintf(bb, "\tbbits = %d\n", lz77.bbits)
+	fmt.Fprintf(bb, "\twbits = %d\n", lz77.wbits)
+	fmt.Fprintf(bb, "\thbits = %d\n", lz77.hbits)
+	fmt.Fprintf(bb, "\tminLen = %d\n", lz77.minLen)
+	fmt.Fprintf(bb, "\tmaxLen = %d\n", lz77.maxLen)
+	fmt.Fprintf(bb, "\tmaxDist = %d\n", lz77.maxDist)
+	fmt.Fprintf(bb, "\thashMask = %#08x\n", lz77.hashMask)
+	fmt.Fprintf(bb, "\tbCap = %d\n", lz77.bsize)
+	fmt.Fprintf(bb, "\twCap = %d\n", lz77.wsize)
+	fmt.Fprintf(bb, "\th = %d\n", h)
+	fmt.Fprintf(bb, "\ti = %d\n", i)
+	fmt.Fprintf(bb, "\tj = %d\n", j)
+	fmt.Fprintf(bb, "\tlength = %d\n", used)
 
-	buf.WriteString("\tbytes = [")
+	bb.WriteString("\tbytes = [")
 	for index := h; index < j; index++ {
 		prefix := ""
 		if index == i {
 			prefix = " |"
 		}
 		ch := lz77.slice[index]
-		fmt.Fprintf(buf, "%s %02x", prefix, ch)
+		fmt.Fprintf(bb, "%s %02x", prefix, ch)
 	}
 	if i == j {
-		buf.WriteString(" |")
+		bb.WriteString(" |")
 	}
-	buf.WriteString(" ]\n")
+	bb.WriteString(" ]\n")
 
 	if lz77.htLastByHash != nil {
-		buf.WriteString("\thashtable = [")
+		bb.WriteString("\thashtable = [")
 
 		for index, lastPlusOne := range lz77.htLastByHash {
 			if lastPlusOne > h && lastPlusOne <= i {
 				hash := uint32(index)
 				last := lastPlusOne - 1
-				fmt.Fprintf(buf, " %#02x:[%d", hash, last)
+				fmt.Fprintf(bb, " %#02x:[%d", hash, last)
 				prevPlusOne := lz77.htPrevByIndex[last]
 				for prevPlusOne > h && prevPlusOne < lastPlusOne {
 					prev := prevPlusOne - 1
-					fmt.Fprintf(buf, " %d", prev)
+					fmt.Fprintf(bb, " %d", prev)
 					lastPlusOne = prevPlusOne
 					prevPlusOne = lz77.htPrevByIndex[prev]
 				}
-				buf.WriteString("]")
+				bb.WriteString("]")
 			}
 		}
 
-		buf.WriteString(" ]\n")
+		bb.WriteString(" ]\n")
 	}
 
-	buf.WriteString(")\n")
-	return buf.String()
+	bb.WriteString(")\n")
+	return bb.String()
 }
 
 // GoString returns a brief dump of the LZ77's internal state.
 func (lz77 LZ77) GoString() string {
-	buf := takeStringsBuilder()
-	defer giveStringsBuilder(buf)
+	bb := bufferpool.Get()
+	defer bufferpool.Put(bb)
 
-	buf.WriteString("LZ77(")
-	fmt.Fprintf(buf, "bbits=%d, ", lz77.bbits)
-	fmt.Fprintf(buf, "wbits=%d, ", lz77.wbits)
-	fmt.Fprintf(buf, "hbits=%d, ", lz77.hbits)
-	fmt.Fprintf(buf, "minLen=%d, ", lz77.minLen)
-	fmt.Fprintf(buf, "maxLen=%d, ", lz77.maxLen)
-	fmt.Fprintf(buf, "maxDist=%d, ", lz77.maxDist)
-	fmt.Fprintf(buf, "bsize=%d, ", lz77.bsize)
-	fmt.Fprintf(buf, "wsize=%d, ", lz77.wsize)
-	fmt.Fprintf(buf, "h=%d, ", lz77.h)
-	fmt.Fprintf(buf, "i=%d, ", lz77.i)
-	fmt.Fprintf(buf, "j=%d", lz77.j)
-	buf.WriteString(")")
+	bb.WriteString("LZ77(")
+	fmt.Fprintf(bb, "bbits=%d, ", lz77.bbits)
+	fmt.Fprintf(bb, "wbits=%d, ", lz77.wbits)
+	fmt.Fprintf(bb, "hbits=%d, ", lz77.hbits)
+	fmt.Fprintf(bb, "minLen=%d, ", lz77.minLen)
+	fmt.Fprintf(bb, "maxLen=%d, ", lz77.maxLen)
+	fmt.Fprintf(bb, "maxDist=%d, ", lz77.maxDist)
+	fmt.Fprintf(bb, "bsize=%d, ", lz77.bsize)
+	fmt.Fprintf(bb, "wsize=%d, ", lz77.wsize)
+	fmt.Fprintf(bb, "h=%d, ", lz77.h)
+	fmt.Fprintf(bb, "i=%d, ", lz77.i)
+	fmt.Fprintf(bb, "j=%d", lz77.j)
+	bb.WriteString(")")
 
-	return buf.String()
+	return bb.String()
 }
 
 // String returns a plain-text description of the LZ77.

@@ -6,6 +6,7 @@ import (
 	"io"
 
 	"github.com/chronos-tachyon/assert"
+	"github.com/chronos-tachyon/bufferpool"
 	"github.com/chronos-tachyon/bzero"
 )
 
@@ -318,8 +319,8 @@ func (buffer Buffer) Bytes() []byte {
 
 // DebugString returns a detailed dump of the Buffer's internal state.
 func (buffer Buffer) DebugString() string {
-	buf := takeStringsBuilder()
-	defer giveStringsBuilder(buf)
+	bb := bufferpool.Get()
+	defer bufferpool.Put(bb)
 
 	nbits := buffer.nbits
 	size := buffer.size
@@ -328,20 +329,20 @@ func (buffer Buffer) DebugString() string {
 	x := (b - a)
 	slice := buffer.slice
 
-	buf.WriteString("Buffer(")
-	fmt.Fprintf(buf, "nbits=%d, ", nbits)
-	fmt.Fprintf(buf, "size=%d, ", size)
-	fmt.Fprintf(buf, "a=%d, ", a)
-	fmt.Fprintf(buf, "b=%d, ", b)
-	fmt.Fprintf(buf, "len=%d, ", x)
-	buf.WriteString("[")
+	bb.WriteString("Buffer(")
+	fmt.Fprintf(bb, "nbits=%d, ", nbits)
+	fmt.Fprintf(bb, "size=%d, ", size)
+	fmt.Fprintf(bb, "a=%d, ", a)
+	fmt.Fprintf(bb, "b=%d, ", b)
+	fmt.Fprintf(bb, "len=%d, ", x)
+	bb.WriteString("[")
 	for a < b {
 		ch := slice[a]
 		a++
-		fmt.Fprintf(buf, "%02x ", ch)
+		fmt.Fprintf(bb, "%02x ", ch)
 	}
-	buf.WriteString(" ])")
-	return buf.String()
+	bb.WriteString(" ])")
+	return bb.String()
 }
 
 // GoString returns a brief dump of the Buffer's internal state.
