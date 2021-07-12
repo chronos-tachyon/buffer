@@ -173,6 +173,11 @@ func (buffer *Buffer) Write(data []byte) (int, error) {
 // May return any error returned by the Reader, including io.EOF.  If a nil
 // error is returned, then the buffer is now full.
 func (buffer *Buffer) ReadFrom(r io.Reader) (int64, error) {
+	if x, ok := r.(*Buffer); ok && buffer.IsEmpty() && x.NumBits() == buffer.NumBits() {
+		buffer.Swap(x)
+		return int64(buffer.Len()), nil
+	}
+
 	var total int64
 	var err error
 
@@ -280,6 +285,11 @@ func (buffer *Buffer) Read(data []byte) (int, error) {
 // May return any error returned by the Writer.  If a nil error is returned,
 // then the Buffer is now empty.
 func (buffer *Buffer) WriteTo(w io.Writer) (int64, error) {
+	if x, ok := w.(*Buffer); ok && x.IsEmpty() && x.NumBits() == buffer.NumBits() {
+		buffer.Swap(x)
+		return int64(x.Len()), nil
+	}
+
 	var total int64
 	var err error
 
@@ -350,9 +360,16 @@ func (buffer Buffer) GoString() string {
 	return fmt.Sprintf("Buffer(size=%d,a=%d,b=%d,len=%d)", buffer.size, buffer.a, buffer.b, buffer.Len())
 }
 
-// String returns a plain-text description of the buffer.
+// String returns the contents of the Buffer as a string.
 func (buffer Buffer) String() string {
-	return fmt.Sprintf("(buffer with %d bytes)", buffer.Len())
+	return string(buffer.BytesView())
+}
+
+// Swap exchanges this Buffer's contents with another.
+func (buffer *Buffer) Swap(other *Buffer) {
+	tmp := *buffer
+	*buffer = *other
+	*other = tmp
 }
 
 func (buffer *Buffer) shift(n uint32) {

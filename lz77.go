@@ -339,9 +339,9 @@ func (lz77 LZ77) GoString() string {
 	return bb.String()
 }
 
-// String returns a plain-text description of the LZ77.
+// String returns the contents of the LZ77's Buffer as a string.
 func (lz77 LZ77) String() string {
-	return fmt.Sprintf("(window-buffer with %d bytes in the buffer)", lz77.Len())
+	return string(lz77.BufferBytesView())
 }
 
 // PrepareBulkWrite obtains a slice into which the caller can write bytes.  See

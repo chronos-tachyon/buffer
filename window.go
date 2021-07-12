@@ -243,9 +243,9 @@ func (window Window) GoString() string {
 	return fmt.Sprintf("Window(size=%d,end=%d)", window.size, window.end)
 }
 
-// String returns a plain-text description of the Window.
+// String returns the contents of the Window as a string.
 func (window Window) String() string {
-	return fmt.Sprintf("(sliding window with %d bytes)", window.Size())
+	return string(window.BytesView())
 }
 
 func (window *Window) shift(n uint32) {
